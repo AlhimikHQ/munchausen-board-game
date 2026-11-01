@@ -24,11 +24,11 @@ button{font:inherit;padding:8px 14px;border-radius:10px;border:1px solid var(--l
 #sw{display:flex;gap:18px;justify-content:center;width:100%}
 #sw button{width:var(--tok);height:var(--tok);padding:0;border-radius:50%;border:3px solid #fff;box-shadow:0 0 0 2px #000,0 3px 8px #0006}
 #srow{display:flex;width:100%;align-items:center;justify-content:space-between;gap:14px}
-#cnt{display:flex;align-items:center;gap:10px}#cnt span{font-size:2.3rem}
-#cnt button{width:62px;height:62px;padding:0;border-radius:18px;font-size:2.2rem;font-weight:800;line-height:1}
+#cnt{display:flex;align-items:center;gap:10px}#cnt #netToggle{width:auto;min-width:48px;height:62px;padding:0;border:0;border-radius:0;background:transparent;box-shadow:none;font-size:2.3rem;line-height:1}
+#cnt button{width:62px;height:62px;padding:0;border-radius:18px;font-size:2.2rem;font-weight:800;line-height:1}#setup.net-open #cnt #pm,#setup.net-open #cnt #pn,#setup.net-open #cnt #pp{display:none}
 #pn{min-width:1.1em;text-align:center;font-size:2.7rem}
 #go{width:112px;height:66px;padding:0;font-size:2.5rem;font-weight:800;line-height:1;border-radius:20px;background:#2a8a3a;color:#fff}
-#net{display:flex;flex-direction:column;gap:8px;width:100%;align-items:center;font-size:.95rem}#net>div{display:flex;gap:8px;align-items:center;justify-content:center}#roomStatus{min-height:1.2em;overflow-wrap:anywhere}#pal{position:fixed;inset:0;z-index:60;background:#000a;display:flex;align-items:center;justify-content:center}
+#net{display:flex;flex-direction:column;gap:8px;width:100%;align-items:center;font-size:.95rem}#net[hidden],#netJoinForm[hidden]{display:none}#net>div{display:flex;gap:8px;align-items:center;justify-content:center}#netActions button,#roomJoin{min-width:54px;height:48px;padding:0 14px;font-size:1.8rem;font-weight:800;line-height:1;border-radius:14px}#roomStatus{min-height:1.2em;overflow-wrap:anywhere}#pal{position:fixed;inset:0;z-index:60;background:#000a;display:flex;align-items:center;justify-content:center}
 #pal .card{background:var(--panel);color:var(--fg);padding:12px;border-radius:14px;width:min(86vw,300px)}
 #pal .t{font-weight:700;text-align:center;margin-bottom:8px}#pal .g{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
 #pal .g button{aspect-ratio:1.4;padding:0;border:2px solid #0008;border-radius:12px;min-width:0}#pal .g button.cur{outline:2px solid #fff;outline-offset:1px}#pal .g button:disabled{opacity:.18}
@@ -56,7 +56,7 @@ button{font:inherit;padding:8px 14px;border-radius:10px;border:1px solid var(--l
 #res button{margin-top:12px;font-size:1.1rem}
 </style></head><body>
 <div id="boardw"><div id="board"></div></div>
-<div id="setup"><div id="sw"></div><div id="srow"><div id="cnt"><span>👥</span><button id="pm">−</button><b id="pn">3</b><button id="pp">+</button></div><button id="go">▶</button></div><div id="net"><div><button id="roomCreate">Создать комнату</button></div><div><input id="roomInput" maxlength="6" placeholder="Код комнаты" autocomplete="off" style="width:125px;padding:10px;border-radius:9px;text-align:center;text-transform:uppercase"><button id="roomJoin">Войти</button></div><div id="roomStatus" aria-live="polite"></div></div></div>
+<div id="setup"><div id="sw"></div><div id="srow"><div id="cnt"><button id="netToggle" type="button" aria-label="Сетевая игра" aria-expanded="false">👥</button><button id="pm">−</button><b id="pn">3</b><button id="pp">+</button></div><button id="go">▶</button></div><div id="net" hidden><div id="netActions"><button id="roomCreate" type="button" aria-label="Создать комнату">＋</button><button id="netJoinToggle" type="button" aria-label="Ввести код комнаты">←</button></div><div id="netJoinForm" hidden><input id="roomInput" maxlength="6" placeholder="Код комнаты" autocomplete="off" style="width:125px;padding:10px;border-radius:9px;text-align:center;text-transform:uppercase"><button id="roomJoin" type="button" aria-label="Подключиться к комнате">←</button></div><div id="roomStatus" aria-live="polite"></div></div></div>
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script><script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"></script><script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-database-compat.js"></script>
 <script>
 const CW=100/9,TH=1316;let CH=117.5/13.16;
@@ -200,7 +200,7 @@ function applyNetSnapshot(s){if(!s||!started)return;mode=s.mode;dl=s.dl||[];di=s
 async function runNetEvent(ev){try{await play(ev.roll);if(isHost)await roomRef.child('state').update({status:'started',players:memberList,snapshot:makeNetSnapshot()});}catch(e){roomStatus('Ошибка хода: '+e.message);}finally{if(isHost&&pendingEventResolve){pendingEventResolve();pendingEventResolve=null;}}}
 async function publishRoll(roll){if(!isHost)return;const active=mode==='draw'?dl[di]:cur;if(memberList[active]&&memberList[active].uid!==fbUser.uid){roomStatus('Сейчас ход другого игрока.');return;}const seq=lastEvent+1;const done=new Promise(resolve=>{pendingEventResolve=resolve;});await roomRef.child('event').set({seq,roll,by:fbUser.uid});await done;}
 function netRoll(roll){if(!netMode){play(roll);return;}if(!started)return;if(isHost){publishRoll(roll).catch(e=>roomStatus('Ошибка отправки броска: '+e.message));return;}const active=mode==='draw'?dl[di]:cur;if(!memberList[active]||memberList[active].uid!==fbUser.uid){roomStatus('Сейчас ход другого игрока.');return;}roomRef.child('requests').push({uid:fbUser.uid,roll,createdAt:firebase.database.ServerValue.TIMESTAMP}).catch(e=>roomStatus('Ошибка отправки броска: '+e.message));}
-document.querySelector('#roomCreate').onclick=createRoom;document.querySelector('#roomJoin').onclick=joinRoom;
+document.querySelector('#netToggle').onclick=()=>{const opening=$('#net').hidden;$('#net').hidden=!opening;$('#netToggle').setAttribute('aria-expanded',String(opening));$('#setup').classList.toggle('net-open',opening);if(!opening)$('#netJoinForm').hidden=true;};document.querySelector('#netJoinToggle').onclick=()=>{$('#netJoinForm').hidden=false;$('#roomInput').focus();};document.querySelector('#roomCreate').onclick=createRoom;document.querySelector('#roomJoin').onclick=joinRoom;
 
 /* Случайность: из физически возможных вариантов броска (небольшой разброс угла и силы) выбирается тот, после которого
    кубик по честному качению ляжет выбранной случайно гранью. Куб при этом катится в нажатую сторону и переворачивается через рёбра. */
