@@ -27,6 +27,17 @@ test('Firebase failures are visible in the game instead of only the WebView cons
   assert.ok(source.includes("firebase.database().goOnline()"));
 });
 
+test('Android release APKs keep a stable signer and receive increasing version codes', () => {
+  const gradle = fs.readFileSync(new URL('../android/app/build.gradle', import.meta.url), 'utf8');
+  const workflow = fs.readFileSync(new URL('../.github/workflows/android.yml', import.meta.url), 'utf8');
+  assert.ok(gradle.includes('versionCode generatedVersionCode'));
+  assert.ok(gradle.includes('1000 + githubRunNumber'));
+  assert.ok(gradle.includes('signingConfig signingConfigs.release'));
+  assert.ok(workflow.includes('ANDROID_KEYSTORE_BASE64'));
+  assert.ok(workflow.includes('assembleRelease'));
+  assert.ok(workflow.includes('app-release.apk'));
+});
+
 
 test('room codes contain exactly three dice', () => {
   assert.ok(source.includes("function makeRoomCode(){return Array.from({length:3},randomDie).join('');}"));
