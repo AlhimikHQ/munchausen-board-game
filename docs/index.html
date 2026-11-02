@@ -189,7 +189,7 @@ let netMode=false,fbUser=null,roomRef=null,roomCode='',isHost=false,myIndex=-1,m
 let roomTurnToken='',roomExpectedUid='',roomProcessing=false,lastEvent=0,roomSeq=0,roomMaxPlayers=3,roomStarting=false,roomStartPending=false;
 let requestQueue=Promise.resolve(),eventQueue=Promise.resolve(),pendingNetEvents=Object.create(null);
 let authError='',authPromise=null,authStateUnsub=null,connectionRef=null,connectionState=null,roomListeners=[];
-let remoteDiceResolve=null,remoteDiceTimer=0,roomCreatePending=false,roomJoinPending=false,netUiEpoch=0,presenceHeartbeatTimer=0;
+let remoteDiceResolve=null,remoteDiceTimer=0,roomCreatePending=false,roomJoinPending=false,netUiEpoch=0,presenceHeartbeatTimer=0,staleLockRecoveryTimer=0;
 const roomStatus=()=>{};
 function withTimeout(promise,ms,message){return new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(new Error(message||'Firebase timeout')),ms);Promise.resolve(promise).then(value=>{clearTimeout(timer);resolve(value);},error=>{clearTimeout(timer);reject(error);});});}
 function netErr(error){const code=(error&&error.code)||'',message=(error&&error.message)||String(error||'');if(/permission[_-]denied/i.test(code+' '+message))return'permission-denied';if(/operation-not-allowed/i.test(code+' '+message))return'anonymous-auth-disabled';if(/network|disconnected|unavailable/i.test(code+' '+message))return'network-unavailable';return code||'firebase-error';}
@@ -447,6 +447,32 @@ function drainNetEvents(){
   const keys=Object.keys(pendingNetEvents).map(Number).filter(Number.isFinite).sort((a,b)=>a-b);if(keys.length&&keys[0]>lastEvent+1)await recoverRoomSnapshot();
  }).catch(e=>console.warn('Firebase event queue:',netErr(e),e));
 }
+async function recoverStaleProcessingLock(){
+ if(!roomRef||!isHost||!netMode)return false;
+ const tx=await roomRef.transaction(room=>{
+  const processing=room&&room.state&&room.state.processing;
+  if(!processing||Date.now()-Number(processing.claimedAt||0)<30000)return;
+  room.state.processing=null;room.meta.updatedAt=Date.now();return room;
+ },null,false);
+ if(!tx.committed)return false;
+ const state=tx.snapshot.child('state').val();
+ if(state&&state.status==='started'){
+  if(!started)startNetworkGame(state.players||[],state.snapshot||null,Number(state.seq)||0,state.turnToken,state.activeUid);
+  else applyNetSnapshot(state.snapshot);
+  roomSeq=Number(state.seq)||roomSeq;lastEvent=Math.max(lastEvent,roomSeq);
+  roomTurnToken=state.turnToken||'';roomExpectedUid=state.activeUid||'';roomProcessing=false;
+ }
+ const pending=await roomRef.child('requests').once('value');
+ pending.forEach(child=>{
+  const request=child.val();if(!request)return;
+  requestQueue=requestQueue.then(()=>processRollRequest(request,child.key)).catch(e=>console.warn('Firebase recovered request:',netErr(e),e));
+ });
+ return true;
+}
+function scheduleStaleLockRecovery(){
+ if(staleLockRecoveryTimer)clearTimeout(staleLockRecoveryTimer);
+ staleLockRecoveryTimer=setTimeout(()=>{staleLockRecoveryTimer=0;recoverStaleProcessingLock().catch(e=>console.warn('Firebase stale lock recovery:',netErr(e),e));},35000);
+}
 async function releaseProcessingLock(requestId){
  if(!roomRef||!isHost)return;
  await roomRef.transaction(room=>{if(!room||!room.state||!room.state.processing||room.state.processing.requestId!==requestId)return;room.state.processing=null;return room;},null,false);
@@ -459,7 +485,9 @@ async function processRollRequest(request,requestId){
  try{
   const claim=await roomRef.transaction(room=>{
    if(!room||!room.meta||room.meta.status!=='started'||!room.state)return;
-   const state=room.state;if(state.processing||state.turnToken!==request.turnToken||state.activeUid!==request.uid)return;
+   const state=room.state;
+   if(state.processing&&Date.now()-Number(state.processing.claimedAt||0)>=30000)state.processing=null;
+   if(state.processing||state.turnToken!==request.turnToken||state.activeUid!==request.uid)return;
    state.processing={requestId,uid:request.uid,turnToken:request.turnToken,claimedAt:Date.now()};return room;
   },null,false);
   claimed=claim.committed;if(!claimed)return;
@@ -511,9 +539,11 @@ async function restoreSavedRoom(){
   roomCode=code;roomRef=ref;roomMeta=meta;roomMaxPlayers=Number(meta.maxPlayers)||3;mySeat=seat;
   netMode=true;isHost=meta.hostUid===fbUser.uid;myIndex=seat;memberList=[];networkPlayers=[];startPresenceHeartbeat();
   showRoomCode(code);watchMembers();watchRoomState();
+  $('#net').hidden=false;$('#netToggle').setAttribute('aria-expanded','true');
   $('#roomCreate').hidden=!isHost;$('#netJoinToggle').hidden=true;$('#roomJoinDice').hidden=true;
   $('#roomCodeDisplay').hidden=false;$('#joinSlot').hidden=false;$('#pm').disabled=true;$('#pp').disabled=true;
   $('#roomCreate').disabled=true;$('#roomJoinConfirm').disabled=true;updateLobbyControls();
+  await recoverStaleProcessingLock();scheduleStaleLockRecovery();
  }catch(e){console.warn('Firebase saved room restore:',netErr(e),e);}
 }
 async function restoreRoomConnection(){
@@ -524,11 +554,13 @@ async function restoreRoomConnection(){
  await memberRef.update({connected:true,lastSeenAt:Date.now()});
  await memberRef.onDisconnect().update({connected:false,ready:false,lastSeenAt:firebase.database.ServerValue.TIMESTAMP});
  startPresenceHeartbeat();
+ await recoverStaleProcessingLock();scheduleStaleLockRecovery();
  const state=(await ref.child('state').once('value')).val();
  if(state&&started&&Number(state.seq)>lastEvent+1)await recoverRoomSnapshot();
 }
 async function leaveNetworkSetup(persist=true){
  const ref=roomRef,uid=fbUser&&fbUser.uid,host=isHost,seat=mySeat,active=netMode;
+ if(staleLockRecoveryTimer){clearTimeout(staleLockRecoveryTimer);staleLockRecoveryTimer=0;}
  const preserveActiveGuest=active&&!host&&(roomMeta&&roomMeta.status==='started'||started);
  stopPresenceHeartbeat();stopRoomListeners();
  netMode=false;isHost=false;roomCode='';roomRef=null;memberList=[];networkPlayers=[];roomMeta=null;myIndex=-1;mySeat=-1;
