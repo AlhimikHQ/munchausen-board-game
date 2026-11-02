@@ -10,7 +10,6 @@ import {
 import { ref, get, set, update } from "firebase/database";
 
 const projectId = "demo-munchausen-board-game";
-let hostDb;
 let env;
 
 const makeRoom = (overrides = {}) => ({
@@ -177,6 +176,23 @@ test("members can update only their own presence, readiness and color", async ()
   await assertSucceeds(set(ref(guest, "rooms/123/members/guest/color"), "#12c4c4"));
   await assertFails(set(ref(guest, "rooms/123/members/host/ready"), false));
   await assertFails(set(ref(guest, "rooms/123/members/host/color"), "#000000"));
+});
+
+test("requesters can delete rejected or expired requests but not active requests", async () => {
+  await seedRoom();
+  const guest = env.authenticatedContext("guest").database();
+  const host = env.authenticatedContext("host").database();
+  const requestPath = "rooms/123/joinRequests/guest";
+  await assertSucceeds(set(ref(guest, requestPath), {
+    name: "Guest", createdAt: Date.now()
+  }));
+  await assertFails(set(ref(guest, requestPath), null));
+  await assertSucceeds(update(ref(host, requestPath), { status: "rejected" }));
+  await assertSucceeds(set(ref(guest, requestPath), null));
+  await assertSucceeds(set(ref(guest, requestPath), {
+    name: "Guest", createdAt: Date.now() - 120000
+  }));
+  await assertSucceeds(set(ref(guest, requestPath), null));
 });
 
 test("only a current member can take over an offline host", async () => {
