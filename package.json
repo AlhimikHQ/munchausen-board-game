@@ -7,7 +7,8 @@
     "node": ">=20"
   },
   "scripts": {
-    "test": "node --test tests/*.test.mjs",
+    "test": "npm run test:static && npm run test:rules",
+    "test:static": "node --test tests/game-static.test.mjs",
     "test:rules": "firebase emulators:exec --only database --project demo-munchausen \"node --test tests/database.rules.test.mjs\""
   },
   "devDependencies": {
