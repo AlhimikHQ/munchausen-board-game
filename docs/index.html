@@ -183,7 +183,7 @@ addEventListener('pointerdown',audioInit);
 const awaiting=()=>started&&!busy&&!over&&!P.some(p=>p.anim);
 /* Firebase multiplayer: host validates turns and publishes authoritative dice results. */
 const firebaseConfig={apiKey:"AIzaSyClRq2KotMI-ajRV_pWGG2t1eqRYKy6Q_I",authDomain:"board-games-n1.firebaseapp.com",databaseURL:"https://board-games-n1-default-rtdb.europe-west1.firebasedatabase.app",projectId:"board-games-n1",storageBucket:"board-games-n1.firebasestorage.app",messagingSenderId:"797191791563",appId:"1:797191791563:web:4f1c5ce0acaf15ceb24c4e"};
-const FIREBASE_SCHEMA=3,ROOM_EVENT_LIMIT=64,ROOM_STALE_MEMBER_MS=15*60*1000;
+const FIREBASE_SCHEMA=3,ROOM_EVENT_LIMIT=64,ROOM_STALE_MEMBER_MS=15*60*1000,ROOM_STORAGE_KEY='munchausen.room.v3';
 const NETWORK_DEFAULT_COLORS=['#e02020','#1e5bff','#1faa3c','#ffe94d','#fff'];
 let netMode=false,fbUser=null,roomRef=null,roomCode='',isHost=false,myIndex=-1,mySeat=-1,memberList=[],networkPlayers=[],roomMeta=null;
 let roomTurnToken='',roomExpectedUid='',roomProcessing=false,lastEvent=0,roomSeq=0,roomMaxPlayers=3,roomStarting=false,roomStartPending=false;
@@ -222,6 +222,8 @@ function listenRoom(target,event,callback){target.on(event,callback);roomListene
 function stopRoomListeners(){roomListeners.forEach(x=>{try{x.target.off(x.event,x.callback);}catch(e){}});roomListeners=[];}
 function makeTurnToken(seq,uid){const nonce=window.crypto&&crypto.randomUUID?crypto.randomUUID():Math.random().toString(36).slice(2)+Date.now().toString(36);return String(seq)+':'+String(uid||'none')+':'+nonce;}
 function roomCodeValid(code){return typeof code==='string'&&/^[1-6]{3}$/.test(code);}
+function saveRoomCode(code){try{localStorage.setItem(ROOM_STORAGE_KEY,code);}catch(e){console.warn('Room session storage:',netErr(e));}}
+function clearSavedRoomCode(){try{localStorage.removeItem(ROOM_STORAGE_KEY);}catch(e){}}
 function activePlayerIndex(snapshot){if(!snapshot)return 0;if(snapshot.mode==='draw')return Number(snapshot.dl&&snapshot.dl[snapshot.di]!==undefined?snapshot.dl[snapshot.di]:0);return Number(snapshot.cur)||0;}
 function activePlayerUid(snapshot){const p=networkPlayers[activePlayerIndex(snapshot)];return p&&p.uid||'';}
 function makeInitialSnapshot(players){
@@ -280,7 +282,7 @@ async function createRoom(){
    if(epoch!==netUiEpoch||$('#net').hidden)return;
   }
   if(!created)throw new Error('No free room code');
-  roomCode=code;roomRef=created;isHost=true;netMode=true;myIndex=0;mySeat=0;
+  roomCode=code;roomRef=created;isHost=true;netMode=true;myIndex=0;mySeat=0;saveRoomCode(code);
   await roomRef.onDisconnect().remove();showRoomCode(roomCode);watchMembers();watchRoomState();
   $('#roomCreate').hidden=false;$('#netJoinToggle').hidden=true;$('#roomCodeDisplay').hidden=false;$('#roomJoinDice').hidden=true;$('#joinSlot').hidden=false;
   $('#pm').disabled=true;$('#pp').disabled=true;$('#roomCreate').disabled=true;$('#roomJoinConfirm').disabled=true;updateLobbyControls();
@@ -299,7 +301,7 @@ async function joinRoom(){
   roomMaxPlayers=Math.max(2,Math.min(5,Number(meta.maxPlayers)||0));if(roomMaxPlayers<2)return;
   const memberRef=ref.child('members/'+fbUser.uid),existing=await withTimeout(memberRef.once('value'),12000,'Firebase membership lookup timeout');
   let member=existing.val();
-  if(member){claimedSeat=Number(member.seat);if(!Number.isInteger(claimedSeat)||claimedSeat<0||claimedSeat>=roomMaxPlayers)return;}
+  if(member){if(member.connected!==false)return;claimedSeat=Number(member.seat);if(!Number.isInteger(claimedSeat)||claimedSeat<0||claimedSeat>=roomMaxPlayers)return;}
   else{
    if(meta.status!=='lobby')return;
    for(let seat=0;seat<roomMaxPlayers;seat++){
@@ -316,7 +318,7 @@ async function joinRoom(){
   if(stale()){if(createdMember){try{await memberRef.remove();await ref.child('slots/'+claimedSeat).remove();}catch(e){}}return;}
   await memberRef.update({connected:true,lastSeenAt:Date.now()});
   await memberRef.onDisconnect().update({connected:false,lastSeenAt:firebase.database.ServerValue.TIMESTAMP});
-  roomCode=code;roomRef=ref;netMode=true;isHost=meta.hostUid===fbUser.uid;mySeat=claimedSeat;myIndex=claimedSeat;
+  roomCode=code;roomRef=ref;netMode=true;isHost=meta.hostUid===fbUser.uid;mySeat=claimedSeat;myIndex=claimedSeat;saveRoomCode(code);
   showRoomCode(code);watchMembers();watchRoomState();
   $('#roomJoinDice').hidden=true;$('#roomCodeDisplay').hidden=false;$('#joinSlot').hidden=false;
   $('#roomCreate').hidden=!isHost;$('#netJoinToggle').hidden=true;$('#pm').disabled=true;$('#pp').disabled=true;
@@ -471,9 +473,35 @@ async function processRollRequest(request,requestId){
 }
 function netRoll(roll,launchState=V.netLaunchState,diceState=Array.from(S)){
  if(!netMode||!started||roomProcessing||!awaitingOrDraw()||!roomRef||!fbUser||roomExpectedUid!==fbUser.uid)return;
- const requestRef=roomRef.child('requests').push(),requestId=requestRef.key;if(!requestId)return;
+ const requestId=fbUser.uid,requestRef=roomRef.child('requests/'+requestId);
  requestRef.set({requestId,uid:fbUser.uid,roll:Number(roll),turnToken:roomTurnToken,launchState:Array.isArray(launchState)?Array.from(launchState):[],diceState:Array.isArray(diceState)?Array.from(diceState):[],createdAt:Date.now()})
  .catch(e=>console.warn('Firebase turn request:',netErr(e),e));
+}
+async function restoreSavedRoom(){
+ if(!fbUser||netMode)return;
+ let code='';
+ try{code=localStorage.getItem(ROOM_STORAGE_KEY)||'';}catch(e){return;}
+ if(!roomCodeValid(code)){clearSavedRoomCode();return;}
+ try{
+  const ref=firebase.database().ref('rooms/'+code);
+  const meta=(await withTimeout(ref.child('meta').once('value'),8000,'Saved room lookup timeout')).val();
+  if(!meta||meta.status==='closed'||meta.schema!==FIREBASE_SCHEMA){clearSavedRoomCode();return;}
+  const memberRef=ref.child('members/'+fbUser.uid),memberSnap=await withTimeout(memberRef.once('value'),8000,'Saved membership lookup timeout');
+  if(!memberSnap.exists()){clearSavedRoomCode();return;}
+  const member=memberSnap.val()||{};
+  if(member.connected!==false)return;
+  const seat=Number(member.seat);
+  if(!Number.isInteger(seat)||seat<0||seat>=Number(meta.maxPlayers)){clearSavedRoomCode();return;}
+  await memberRef.update({connected:true,lastSeenAt:Date.now()});
+  await memberRef.onDisconnect().update({connected:false,lastSeenAt:firebase.database.ServerValue.TIMESTAMP});
+  roomCode=code;roomRef=ref;roomMeta=meta;roomMaxPlayers=Number(meta.maxPlayers)||3;mySeat=seat;
+  netMode=true;isHost=meta.hostUid===fbUser.uid;myIndex=seat;memberList=[];networkPlayers=[];
+  if(isHost)await ref.onDisconnect().remove();
+  showRoomCode(code);watchMembers();watchRoomState();
+  $('#roomCreate').hidden=!isHost;$('#netJoinToggle').hidden=true;$('#roomJoinDice').hidden=true;
+  $('#roomCodeDisplay').hidden=false;$('#joinSlot').hidden=false;$('#pm').disabled=true;$('#pp').disabled=true;
+  $('#roomCreate').disabled=true;$('#roomJoinConfirm').disabled=true;updateLobbyControls();
+ }catch(e){console.warn('Firebase saved room restore:',netErr(e),e);}
 }
 async function restoreRoomConnection(){
  const ref=roomRef,uid=fbUser&&fbUser.uid;if(!ref||!uid||!netMode)return;
@@ -484,7 +512,9 @@ async function restoreRoomConnection(){
  const state=(await ref.child('state').once('value')).val();if(state&&started&&Number(state.seq)>lastEvent+1)await recoverRoomSnapshot();
 }
 async function leaveNetworkSetup(persist=true){
- const ref=roomRef,uid=fbUser&&fbUser.uid,host=isHost,seat=mySeat,active=netMode;stopRoomListeners();
+ const ref=roomRef,uid=fbUser&&fbUser.uid,host=isHost,seat=mySeat,active=netMode;
+ const preserveActiveGuest=active&&!host&&(roomMeta&&roomMeta.status==='started'||started);
+ stopRoomListeners();
  netMode=false;isHost=false;roomCode='';roomRef=null;memberList=[];networkPlayers=[];roomMeta=null;myIndex=-1;mySeat=-1;
  roomStarting=false;roomStartPending=false;roomProcessing=false;roomTurnToken='';roomExpectedUid='';roomSeq=0;lastEvent=0;
  pendingNetEvents=Object.create(null);eventQueue=Promise.resolve();requestQueue=Promise.resolve();
@@ -492,11 +522,19 @@ async function leaveNetworkSetup(persist=true){
  $('#pm').disabled=false;$('#pp').disabled=false;$('#roomCreate').disabled=false;$('#roomJoinConfirm').disabled=false;
  $('#go').disabled=false;$('#go').textContent='▶';$('#go').classList.remove('lobby-ready');$('#go').style.background='';joinDiceValues=[1,1,1];renderJoinDice();
  if(remoteDiceResolve){const finish=remoteDiceResolve;finish();}
+ if(!preserveActiveGuest)clearSavedRoomCode();
  if(ref&&active&&persist){
   if(host){try{await ref.onDisconnect().cancel();}catch(e){}try{await ref.remove();}catch(e){console.warn('Firebase host cleanup:',netErr(e));}}
-  else{const memberRef=ref.child('members/'+uid);try{await memberRef.onDisconnect().cancel();}catch(e){}
-   try{await memberRef.remove();}catch(e){console.warn('Firebase member cleanup:',netErr(e));}
-   if(Number.isInteger(seat)&&seat>=0){try{await ref.child('slots/'+seat).remove();}catch(e){console.warn('Firebase seat cleanup:',netErr(e));}}
+  else{
+   const memberRef=ref.child('members/'+uid);
+   if(preserveActiveGuest){
+    try{await memberRef.update({connected:false,lastSeenAt:Date.now()});}catch(e){console.warn('Firebase presence update:',netErr(e));}
+    try{await memberRef.onDisconnect().update({connected:false,lastSeenAt:firebase.database.ServerValue.TIMESTAMP});}catch(e){console.warn('Firebase onDisconnect:',netErr(e));}
+   }else{
+    try{await memberRef.onDisconnect().cancel();}catch(e){}
+    try{await memberRef.remove();}catch(e){console.warn('Firebase member cleanup:',netErr(e));}
+    if(Number.isInteger(seat)&&seat>=0){try{await ref.child('slots/'+seat).remove();}catch(e){console.warn('Firebase seat cleanup:',netErr(e));}}
+   }
   }
  }
 }
@@ -510,6 +548,7 @@ document.querySelector('#joinDice').addEventListener('click',event=>{const die=e
 document.querySelector('#joinDice').addEventListener('pointerdown',event=>{const die=event.target.closest('button[data-die]');if(die)diePointer={index:+die.dataset.die,y:event.clientY};});
 addEventListener('pointerup',event=>{if(!diePointer)return;const d=diePointer;diePointer=null;const dy=event.clientY-d.y;if(Math.abs(dy)>12){lastDieSwipe=performance.now();changeJoinDie(d.index,dy<0?1:-1);}});
 addEventListener('pointercancel',()=>{diePointer=null;});
+authReady.then(ok=>{if(ok)restoreSavedRoom().catch(e=>console.warn('Firebase room restore:',netErr(e),e));});
 
 /* Случайность: из физически возможных вариантов броска (небольшой разброс угла и силы) выбирается тот, после которого
    кубик по честному качению ляжет выбранной случайно гранью. Куб при этом катится в нажатую сторону и переворачивается через рёбра. */
