@@ -7,7 +7,8 @@
     "node": ">=24.12.0"
   },
   "scripts": {
-    "test": "npm run test:static && npm run test:rules",
+    "test": "npm run test:static && npm run test:rules && npm run test:cleanup",
+    "test:cleanup": "node --check functions/index.js && node --test tests/cleanup-policy.test.mjs",
     "test:static": "node --test tests/game-static.test.mjs",
     "test:rules": "firebase emulators:exec --only database --project demo-munchausen \"node --test tests/database.rules.test.mjs\""
   },
