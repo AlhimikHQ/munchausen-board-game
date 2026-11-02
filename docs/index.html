@@ -237,7 +237,7 @@ function ensureAuth(){
   await loadFirebaseSdk();
   if(!window.firebase)throw new Error('Firebase SDK unavailable');
   if(!firebase.apps.length)firebase.initializeApp(firebaseConfig);
-  firebase.database().goOnline();firebase.database().goOnline();
+  firebase.database().goOnline();
   const auth=firebase.auth();try{await auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL);}catch(e){console.warn('Firebase persistence:',netErr(e));}
   if(!authStateUnsub)authStateUnsub=auth.onAuthStateChanged(user=>{const previousUid=fbUser&&fbUser.uid;fbUser=user||null;if(previousUid&&!user&&netMode)leaveNetworkSetup(false);else if(previousUid&&user&&previousUid!==user.uid&&netMode)leaveNetworkSetup(false);},error=>console.warn('Firebase auth state:',netErr(error)));
   let user=auth.currentUser;if(!user)user=(await auth.signInAnonymously()).user;fbUser=user||auth.currentUser;if(!fbUser)throw new Error('Anonymous auth returned no user');
@@ -303,14 +303,6 @@ function watchMembers(){
  listenRoom(roomRef.child('settings'),'value',snap=>{
   const settings=snap.val()||{},colors=Array.isArray(settings.colors)?settings.colors:Object.keys(settings.colors||{}).sort((a,b)=>Number(a)-Number(b)).map(k=>settings.colors[k]);updateRoomPlayerColors(colors);
  });
-}
-// Firebase transactions may first call the updater with null because the room root is not in the local cache.
- // Returning null (rather than undefined) forces a server hash check; if the room exists, Firebase retries
- // the updater with the authoritative server value. A genuinely missing room is still blocked by Rules.
-function roomTransaction(updateFn){
- const target=roomRef;
- if(!target)throw new Error('Room is not connected');
- return target.transaction(current=>current===null?null:updateFn(current),null,false);
 }
 function roomRootData(){
  const now=Date.now();
@@ -409,18 +401,17 @@ async function maybeStartNetworkGame(){
  if(!isHost||started||roomStarting||roomStartPending||!roomRef||!roomMeta||roomMeta.status!=='lobby')return;
  roomStartPending=true;
  try{
-  const tx=await roomTransaction(room=>{
-   if(!room||!room.meta||room.meta.status!=='lobby')return;
-   const members=Object.entries(room.members||{}).map(([uid,value])=>({uid,...value})).sort((a,b)=>Number(a.seat||0)-Number(b.seat||0));
-   const count=Number(room.meta.maxPlayers)||0;
-   if(count<2||members.length!==count||!members.every(m=>m.ready===true&&m.connected!==false))return;
-   const players=members.map(m=>({uid:m.uid,seat:Number(m.seat),name:m.name||'Игрок',color:(room.settings&&room.settings.colors&&room.settings.colors[m.seat])||NETWORK_DEFAULT_COLORS[m.seat]}));
-   const snapshot=makeInitialSnapshot(players),activeUid=players[0].uid,token=makeTurnToken(0,activeUid);
-   room.meta.status='started';room.meta.updatedAt=Date.now();room.state={status:'started',seq:0,players,snapshot,activeUid,turnToken:token,processing:null,updatedAt:Date.now()};return room;
-  },null,false);
-  if(tx.committed){const state=tx.snapshot.child('state').val();if(state)startNetworkGame(state.players,state.snapshot,state.seq,state.turnToken,state.activeUid);}
- }catch(e){console.warn('Firebase game start:',netErr(e),e);}finally{roomStartPending=false;}
+  const members=memberList.slice().sort((a,b)=>Number(a.seat||0)-Number(b.seat||0));
+  const count=Number(roomMeta.maxPlayers)||0;
+  if(count<2||members.length!==count||!members.every(m=>m.ready===true&&m.connected!==false))return;
+  const players=members.map(m=>({uid:m.uid,seat:Number(m.seat),name:m.name||'Игрок',color:COL[Number(m.seat)]||NETWORK_DEFAULT_COLORS[Number(m.seat)]}));
+  const snapshot=makeInitialSnapshot(players),activeUid=players[0].uid,turnToken=makeTurnToken(0,activeUid),now=Date.now();
+  const state={status:'started',seq:0,players,snapshot,activeUid,turnToken,processing:null,updatedAt:now};
+  await roomRef.update({'meta/status':'started','meta/updatedAt':now,state});
+  startNetworkGame(players,snapshot,0,turnToken,activeUid);
+ }catch(e){reportFirebase('Не удалось начать игру',e);}finally{roomStartPending=false;}
 }
+
 function initNetworkBoard(players){
  started=true;over=false;busy=false;np=players.length;networkPlayers=players.slice();
  COL.splice(0,COL.length,...NETWORK_DEFAULT_COLORS.map((c,i)=>players[i]&&players[i].color||c));
@@ -514,13 +505,15 @@ function drainNetEvents(){
 }
 async function recoverStaleProcessingLock(){
  if(!roomRef||!isHost||!netMode)return false;
- const tx=await roomTransaction(room=>{
-  const processing=room&&room.state&&room.state.processing;
+ const stateRef=roomRef.child('state');
+ const tx=await stateRef.transaction(state=>{
+  const processing=state&&state.processing;
   if(!processing||Date.now()-Number(processing.claimedAt||0)<30000)return;
-  room.state.processing=null;room.meta.updatedAt=Date.now();return room;
+  state.processing=null;state.updatedAt=Date.now();return state;
  },null,false);
  if(!tx.committed)return false;
- const state=tx.snapshot.child('state').val();
+ const state=tx.snapshot.val();
+ await roomRef.child('meta/updatedAt').set(Date.now());
  if(state&&state.status==='started'){
   if(!started)startNetworkGame(state.players||[],state.snapshot||null,Number(state.seq)||0,state.turnToken,state.activeUid);
   else applyNetSnapshot(state.snapshot);
@@ -530,60 +523,62 @@ async function recoverStaleProcessingLock(){
  const pending=await roomRef.child('requests').once('value');
  pending.forEach(child=>{
   const request=child.val();if(!request)return;
-  requestQueue=requestQueue.then(()=>processRollRequest(request,child.key)).catch(e=>console.warn('Firebase recovered request:',netErr(e),e));
+  requestQueue=requestQueue.then(()=>processRollRequest(request,child.key)).catch(e=>reportFirebase('Ошибка восстановления хода',e));
  });
  return true;
 }
+
 function scheduleStaleLockRecovery(){
  if(staleLockRecoveryTimer)clearTimeout(staleLockRecoveryTimer);
  staleLockRecoveryTimer=setTimeout(()=>{staleLockRecoveryTimer=0;recoverStaleProcessingLock().catch(e=>console.warn('Firebase stale lock recovery:',netErr(e),e));},35000);
 }
 async function releaseProcessingLock(requestId){
  if(!roomRef||!isHost)return;
- await roomTransaction(room=>{if(!room||!room.state||!room.state.processing||room.state.processing.requestId!==requestId)return;room.state.processing=null;return room;},null,false);
+ await roomRef.child('state').transaction(state=>{
+  if(!state||!state.processing||state.processing.requestId!==requestId)return;
+  state.processing=null;state.updatedAt=Date.now();return state;
+ },null,false);
 }
+
 async function processRollRequest(request,requestId){
  if(!isHost||!roomRef||!requestId)return;
  if(!validRollRequest(request,requestId)||request.uid!==requestId){try{await roomRef.child('requests/'+requestId).remove();}catch(ignore){}return;}
  const actor=memberList.find(m=>m.uid===request.uid);if(!actor||actor.connected===false){try{await roomRef.child('requests/'+requestId).remove();}catch(ignore){}return;}
- let claimed=false,preservePending=false,beforeSnapshot=null,beforeDice=null;
+ let claimed=false,preservePending=false,beforeSnapshot=null,beforeDice=null,lockedState=null;
  try{
-  const claim=await roomTransaction(room=>{
-   if(!room||!room.meta||room.meta.status!=='started'||!room.state)return;
-   const state=room.state;
+  const stateRef=roomRef.child('state');
+  const claim=await stateRef.transaction(state=>{
+   if(!state||state.status!=='started')return;
    if(state.processing&&Date.now()-Number(state.processing.claimedAt||0)>=30000)state.processing=null;
    if(state.processing||state.turnToken!==request.turnToken||state.activeUid!==request.uid)return;
-   state.processing={requestId,uid:request.uid,turnToken:request.turnToken,claimedAt:Date.now()};return room;
+   state.processing={requestId,uid:request.uid,turnToken:request.turnToken,claimedAt:Date.now()};return state;
   },null,false);
   claimed=claim.committed;
+  lockedState=claim.snapshot&&claim.snapshot.val();
   if(!claimed){
-   const state=claim.snapshot&&claim.snapshot.child('state').val();
-   preservePending=!!(state&&state.processing&&state.processing.turnToken===request.turnToken&&state.turnToken===request.turnToken);
+   preservePending=!!(lockedState&&lockedState.processing&&lockedState.processing.turnToken===request.turnToken&&lockedState.turnToken===request.turnToken);
    return;
   }
   roomProcessing=true;beforeSnapshot=makeNetSnapshot();beforeDice=Array.from(S);
   if(request.uid!==fbUser.uid)await replayNetDice({by:request.uid,roll:request.roll,launchState:request.launchState,diceState:request.diceState});
   else{S.set(request.diceState);draw();}
   await play(Number(request.roll));
-  const commit=await roomTransaction(room=>{
-   if(!room||!room.state||!room.state.processing||room.state.processing.requestId!==requestId||room.state.processing.turnToken!==request.turnToken)return;
-   const seq=(Number(room.state.seq)||0)+1,snapshot=makeNetSnapshot();snapshot.seq=seq;
-   const nextIndex=activePlayerIndex(snapshot),activeUid=networkPlayers[nextIndex]&&networkPlayers[nextIndex].uid||'',turnToken=makeTurnToken(seq,activeUid);
-   const event={seq,type:'roll',roll:Number(request.roll),by:request.uid,requestId,launchState:request.launchState,diceState:request.diceState,snapshot,activeUid,turnToken,createdAt:Date.now()};
-   room.events=room.events||{};room.events[String(seq).padStart(12,'0')]=event;
-   const keys=Object.keys(room.events).sort();while(keys.length>ROOM_EVENT_LIMIT)delete room.events[keys.shift()];
-   room.state={status:'started',seq,players:networkPlayers.map((p,i)=>({...p,color:COL[i]})),snapshot,activeUid,turnToken,processing:null,updatedAt:Date.now()};
-   room.meta.updatedAt=Date.now();return room;
-  },null,false);
-  if(!commit.committed)throw new Error('Turn lock lost before commit');
-  const state=commit.snapshot.child('state').val();roomSeq=Number(state.seq)||roomSeq+1;lastEvent=roomSeq;
-  roomTurnToken=state.turnToken||'';roomExpectedUid=state.activeUid||'';roomProcessing=false;
+  if(!lockedState||!lockedState.processing||lockedState.processing.requestId!==requestId||lockedState.processing.turnToken!==request.turnToken)throw new Error('Turn lock lost before commit');
+  const seq=(Number(lockedState.seq)||0)+1,snapshot=makeNetSnapshot();snapshot.seq=seq;
+  const nextIndex=activePlayerIndex(snapshot),activeUid=networkPlayers[nextIndex]&&networkPlayers[nextIndex].uid||'',turnToken=makeTurnToken(seq,activeUid),now=Date.now();
+  const event={seq,type:'roll',roll:Number(request.roll),by:request.uid,requestId,launchState:request.launchState,diceState:request.diceState,snapshot,activeUid,turnToken,createdAt:now};
+  const nextState={status:'started',seq,players:networkPlayers.map((p,i)=>({...p,color:COL[i]})),snapshot,activeUid,turnToken,processing:null,updatedAt:now};
+  const updates={state:nextState,['events/'+String(seq).padStart(12,'0')]:event,'meta/updatedAt':now};
+  if(seq>ROOM_EVENT_LIMIT)updates['events/'+String(seq-ROOM_EVENT_LIMIT).padStart(12,'0')]=null;
+  await roomRef.update(updates);
+  roomSeq=seq;lastEvent=seq;roomTurnToken=turnToken;roomExpectedUid=activeUid;roomProcessing=false;
  }catch(e){
   if(beforeSnapshot&&started){applyNetSnapshot(beforeSnapshot);if(beforeDice)S.set(beforeDice);}
   if(claimed){try{await releaseProcessingLock(requestId);}catch(ignore){}}
-  roomProcessing=false;console.error('Firebase turn transaction:',netErr(e),e);
- }finally{if(roomRef&&!preservePending){try{await roomRef.child('requests/'+requestId).remove();}catch(e){console.warn('Firebase request cleanup:',netErr(e));}}}
+  roomProcessing=false;reportFirebase('Ошибка обработки хода',e);
+ }finally{if(roomRef&&!preservePending){try{await roomRef.child('requests/'+requestId).remove();}catch(e){reportFirebase('Не удалось удалить запрос хода',e);}}}
 }
+
 function netRoll(roll,launchState=V.netLaunchState,diceState=Array.from(S)){
  if(!netMode||!started||roomProcessing||!awaitingOrDraw()||!roomRef||!fbUser||roomExpectedUid!==fbUser.uid)return;
  const requestId=fbUser.uid,requestRef=roomRef.child('requests/'+requestId);
