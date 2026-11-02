@@ -408,16 +408,30 @@ function applyNetSnapshot(snapshot){
  if(Array.isArray(snapshot.diceState)&&snapshot.diceState.length===24&&!V.on){S.set(snapshot.diceState);draw();}
  relayout();if(over){busy=false;act(-1);}else{busy=false;act(mode==='draw'?(dl[di]??0):cur);}
 }
-function simulateDiceResult(launchState){
- if(!Array.isArray(launchState)||launchState.length!==24||!launchState.every(Number.isFinite))return 0;
- const state=Float64Array.from(launchState),oldRec=REC,oldIg=IG,oldIw=IW;let settled=false,result=0;
- try{REC=true;IG=0;IW=0;settled=runSteps(state,1e9);result=settled?topVal(state):0;}catch(e){result=0;}finally{REC=oldRec;IG=oldIg;IW=oldIw;}
- return result;
+function simulateDiceState(launchState){
+ if(!Array.isArray(launchState)||launchState.length!==24||!launchState.every(Number.isFinite))return null;
+ const state=Float64Array.from(launchState),oldRec=REC,oldIg=IG,oldIw=IW;
+ try{
+  REC=true;IG=0;IW=0;
+  if(!runSteps(state,1e9))return null;
+  const roll=topVal(state);
+  let k=0;
+  if(Math.abs(state[16])>Math.abs(state[15+k]))k=1;
+  if(Math.abs(state[17])>Math.abs(state[15+k]))k=2;
+  const sg=state[15+k]>0?1:-1,nx=sg*state[9+k],ny=sg*state[12+k],nz=sg*state[15+k];
+  const angle=Math.acos(Math.min(1,nz)),am=Math.hypot(ny,nx);
+  if(am>1e-9){const R=mmul(rodr([ny/am,-nx/am,0],angle),Array.from(state.subarray(9,18)));state.set(R,9);}
+  state[2]=.5;state[3]=state[4]=state[5]=state[6]=state[7]=state[8]=0;state[20]=-1;
+  return{roll,state:Array.from(state)};
+ }catch(e){return null;}
+ finally{REC=oldRec;IG=oldIg;IW=oldIw;}
 }
 function validRollRequest(request,requestId){
  const roll=Number(request&&request.roll);
- return !!request&&request.requestId===requestId&&Number.isInteger(roll)&&roll>=1&&roll<=6&&Array.isArray(request.diceState)&&
- request.diceState.length===24&&request.diceState.every(Number.isFinite)&&topVal(request.diceState)===roll&&simulateDiceResult(request.launchState)===roll;
+ if(!request||request.requestId!==requestId||request.uid!==requestId||!Number.isInteger(roll)||roll<1||roll>6||
+  !Array.isArray(request.diceState)||request.diceState.length!==24||!request.diceState.every(Number.isFinite)||topVal(request.diceState)!==roll)return false;
+ const simulated=simulateDiceState(request.launchState);
+ return !!simulated&&simulated.roll===roll&&request.diceState.every((value,index)=>Math.abs(value-simulated.state[index])<=1e-5);
 }
 function replayNetDice(event){
  return new Promise(resolve=>{
@@ -479,7 +493,7 @@ async function releaseProcessingLock(requestId){
 }
 async function processRollRequest(request,requestId){
  if(!isHost||!roomRef||!requestId)return;
- if(!validRollRequest(request,requestId)){try{await roomRef.child('requests/'+requestId).remove();}catch(ignore){}return;}
+ if(!validRollRequest(request,requestId)||request.uid!==requestId){try{await roomRef.child('requests/'+requestId).remove();}catch(ignore){}return;}
  const actor=memberList.find(m=>m.uid===request.uid);if(!actor||actor.connected===false){try{await roomRef.child('requests/'+requestId).remove();}catch(ignore){}return;}
  let claimed=false,preservePending=false,beforeSnapshot=null,beforeDice=null;
  try{
