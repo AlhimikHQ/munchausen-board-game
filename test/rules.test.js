@@ -10,6 +10,7 @@ import {
 import { ref, get, set, update } from "firebase/database";
 
 const projectId = "demo-munchausen-board-game";
+let hostDb;
 let env;
 
 const makeRoom = (overrides = {}) => ({
@@ -148,6 +149,7 @@ test("a player may submit only their own valid request on their turn", async () 
     }
   }));
   const guest = env.authenticatedContext("guest").database();
+  const host = env.authenticatedContext("host").database();
   const other = env.authenticatedContext("other").database();
   const fakeState = Array.from({ length: 24 }, (_, i) => i === 9 || i === 13 || i === 17 ? 1 : 0);
   const request = {
@@ -156,6 +158,7 @@ test("a player may submit only their own valid request on their turn", async () 
     createdAt: Date.now()
   };
   await assertSucceeds(set(ref(guest, "rooms/123/requests/request-1"), request));
+  await assertSucceeds(set(ref(host, "rooms/123/requests/request-1"), null));
   await assertFails(set(ref(other, "rooms/123/requests/request-2"), request));
   await assertFails(set(ref(guest, "rooms/123/requests/request-3"), { ...request, uid: "host" }));
   await assertFails(set(ref(guest, "rooms/123/requests/request-4"), { ...request, roll: 7 }));
