@@ -229,7 +229,7 @@ function watchMembers(){
   roomMaxPlayers=Math.max(2,Math.min(5,Number(settings.playerCount)||roomMaxPlayers||3));
   np=roomMaxPlayers;$('#pn').textContent=np;
   const defaults=['#e02020','#1e5bff','#1faa3c','#ffe94d','#fff'];
-  const colors=Array.from({length:roomMaxPlayers},(_,i)=>settings.colors?.[i]||defaults[i]);
+  const colors=defaults.map((fallback,i)=>settings.colors?.[i]||fallback);
   COL.splice(0,COL.length,...colors);
   refreshSw();
   updateLobbyControls();
@@ -331,7 +331,8 @@ function watchRoomState(){
 function awaitingOrDraw(){return started&&!busy&&!over;}
 function initNetworkBoard(players){
  started=true;over=false;busy=false;np=players.length;
- COL.splice(0,COL.length,...players.map((p,i)=>p.color||['#e02020','#1e5bff','#1faa3c','#ffe94d','#fff'][i]));
+ const defaults=['#e02020','#1e5bff','#1faa3c','#ffe94d','#fff'];
+ COL.splice(0,COL.length,...defaults.map((fallback,i)=>players[i]?.color||fallback));
  $('#pn').textContent=np;refreshSw();$('#setup').hidden=true;
  P=[];board.querySelectorAll('.tok').forEach(e=>e.remove());
  for(let i=0;i<np;i++){
@@ -362,7 +363,7 @@ function makeNetSnapshot(){
 }
 function applyNetSnapshot(s){
  if(!s||!started)return;
- if(Array.isArray(s.colors)){COL.splice(0,COL.length,...s.colors);refreshSw();}
+ if(Array.isArray(s.colors)){const defaults=['#e02020','#1e5bff','#1faa3c','#ffe94d','#fff'];COL.splice(0,COL.length,...defaults.map((fallback,i)=>s.colors[i]||fallback));refreshSw();}
  np=Number(s.playerCount)||((s.players||[]).length)||np;$('#pn').textContent=np;
  mode=s.mode;dl=s.dl||[];di=s.di||0;dr=s.dr||{};cur=s.cur||0;TO=s.TO||[];DRES=s.DRES||{};
  ORD.splice(0,ORD.length,...(s.ORD||[]));LB.splice(0,LB.length,...(s.LB||[]));over=!!s.over;
@@ -413,14 +414,14 @@ async function publishRoll(roll,actorUid=fbUser.uid,launchState=V.netLaunchState
   diceState:Array.from(S),snapshot,
   createdAt:firebase.database.ServerValue.TIMESTAMP
  };
- await roomRef.child('events/'+seq).set(event);
  roomSeq=seq;lastEvent=seq;
- await roomRef.child('state').update({seq,snapshot});
+ try{await roomRef.child('events/'+seq).set(event);await roomRef.child('state').update({seq,snapshot});}
+ catch(e){roomSeq=seq-1;lastEvent=seq-1;throw e;}
 }
 function netRoll(roll,launchState=V.netLaunchState,diceState=Array.from(S)){
  if(!netMode){play(roll);return;}
  if(!started)return;
- if(isHost){publishRoll(roll,fbUser.uid,launchState,diceState).catch(e=>console.error('publish roll',e));return;}
+ if(isHost){requestQueue=requestQueue.then(()=>publishRoll(roll,fbUser.uid,launchState,diceState)).catch(e=>console.error('publish roll',e));return;}
  const active=mode==='draw'?dl[di]:cur;
  if(!memberList[active]||memberList[active].uid!==fbUser.uid)return;
  roomRef.child('requests').push({
