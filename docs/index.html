@@ -365,34 +365,40 @@ async function approveRoomRequest(uid,approve){
  }catch(e){roomStatus('Не удалось обработать запрос: '+netErr(e));}
 }
 function startHostRequestListener(){
- if(!isHost||!roomRef)return;
+ const room=roomRef,generation=roomSessionGeneration;
+ if(!isHost||!room)return;
+ const isCurrent=()=>roomRef===room&&roomSessionGeneration===generation&&isHost;
  if(!requestListener){
-  const ref=roomRef.child('joinRequests');
+  const joinRef=room.child('joinRequests');
   requestListener=snap=>{
+   if(!isCurrent())return;
    const request=snap.val();if(!request||request.status==='rejected')return;
-   if(Date.now()-Number(request.createdAt||0)>120000){roomRef.child('joinRequests/'+snap.key).remove().catch(e=>console.warn('expire join request',e));return;}
+   if(Date.now()-Number(request.createdAt||0)>120000){room.child('joinRequests/'+snap.key).remove().catch(e=>console.warn('expire join request',e));return;}
    pendingJoinRequests[snap.key]=request;updateJoinRequestPanel();
   };
-  requestRemovedListener=snap=>{delete pendingJoinRequests[snap.key];updateJoinRequestPanel()};
-  ref.on('child_added',requestListener);
-  ref.on('child_changed',requestListener);
-  ref.on('child_removed',requestRemovedListener);
+  requestRemovedListener=snap=>{if(!isCurrent())return;delete pendingJoinRequests[snap.key];updateJoinRequestPanel()};
+  joinRef.on('child_added',requestListener);
+  joinRef.on('child_changed',requestListener);
+  joinRef.on('child_removed',requestRemovedListener);
  }
  if(!rollRequestListener){
   rollRequestListener=snap=>{
+   if(!isCurrent())return;
    const req=snap.val();if(!req)return;
    requestQueue=requestQueue.then(async()=>{
     try{
-     if(!isHost||req.uid!==snap.val().uid||!Number.isInteger(Number(req.roll))||Number(req.roll)<1||Number(req.roll)>6)return;
+     if(!isCurrent()||req.uid!==snap.val().uid||!Number.isInteger(Number(req.roll))||Number(req.roll)<1||Number(req.roll)>6)return;
      if(Date.now()-Number(req.createdAt||0)>30000)return;
-     const stateSnap=await roomRef.child('state').once('value'),state=stateSnap.val()||{};
+     const stateSnap=await room.child('state').once('value');
+     if(!isCurrent())return;
+     const state=stateSnap.val()||{};
      const active=activePlayerIndex(),expected=active==null?null:memberList[active]?.uid;
      if(state.status!=='started'||state.turnUid!==req.uid||expected!==req.uid||!awaiting())return;
      await publishRoll(Number(req.roll),req.uid,req.launchState,req.diceState);
-    }finally{if(isHost)await snap.ref.remove();}
-   }).catch(e=>roomStatus('Ошибка обработки хода: '+netErr(e)));
+    }finally{if(isCurrent())await snap.ref.remove();}
+   }).catch(e=>{if(isCurrent())roomStatus('Ошибка обработки хода: '+netErr(e))});
   };
-  roomRef.child('requests').on('child_added',rollRequestListener);
+  room.child('requests').on('child_added',rollRequestListener);
  }
 }
 function stopHostRequestListener(){
@@ -439,23 +445,25 @@ function scheduleOfflinePrune(){
  offlinePruneTimer=setTimeout(()=>{maybePruneOfflineMembers();scheduleOfflinePrune()},wait);
 }
 async function maybeElectHost(){
- if(!netMode||!roomRef||!fbUser||isHost||!memberList.length)return;
+ const room=roomRef,generation=roomSessionGeneration;
+ if(!netMode||!room||!fbUser||isHost||!memberList.length)return;
  const current=memberList.find(m=>m.uid===hostUidCurrent);
  if(current&&current.online!==false)return;
  try{
-  const tx=await roomRef.child('hostUid').transaction(old=>{
+  const tx=await room.child('hostUid').transaction(old=>{
    const host=memberList.find(m=>m.uid===old);
    if(host&&host.online!==false)return;
    return fbUser.uid;
   },null,false);
-  if(tx.committed){isHost=true;startHostRequestListener();scheduleOfflinePrune();}
- }catch(e){console.warn('host election',e);}
+  if(tx.committed&&roomRef===room&&roomSessionGeneration===generation){isHost=true;startHostRequestListener();scheduleOfflinePrune();}
+ }catch(e){if(roomRef===room&&roomSessionGeneration===generation)console.warn('host election',e);}
 }
 function maybePruneOfflineMembers(){
- if(!isHost||!roomRef||started)return;
+ const room=roomRef,generation=roomSessionGeneration;
+ if(!isHost||!room||started)return;
  const now=Date.now();
  memberList.filter(m=>m.uid!==fbUser?.uid&&m.online===false&&Number(m.offlineAt||0)>0&&now-Number(m.offlineAt)>=30000).forEach(m=>{
-  roomRef.child('members/'+m.uid).remove().catch(e=>console.warn('remove stale lobby member',e));
+  room.child('members/'+m.uid).remove().catch(e=>{if(roomRef===room&&roomSessionGeneration===generation)console.warn('remove stale lobby member',e)});
  });
 }
 function currentTurnUid(){
@@ -567,22 +575,25 @@ async function joinRoom(){
 }
 function syncFromAuthoritativeState(st){
  if(!st||!started||!st.snapshot)return;
+ const room=roomRef,generation=roomSessionGeneration;
  const seq=Number(st.seq)||0;
  if(isHost&&seq===publishingSeq){lastEvent=seq;roomSeq=seq;return;}
  if(seq<=lastEvent)return;
  if(seq===lastEvent+1&&st.lastEvent&&Number(st.lastEvent.seq)===seq){
   requestQueue=requestQueue.then(async()=>{
-   if(seq<=lastEvent)return;
+   if(room!==roomRef||generation!==roomSessionGeneration||seq<=lastEvent)return;
    await runNetEvent(st.lastEvent);
+   if(room!==roomRef||generation!==roomSessionGeneration)return;
    lastEvent=seq;roomSeq=seq;
   }).catch(async e=>{
+   if(room!==roomRef||generation!==roomSessionGeneration)return;
    console.error('event replay failed',e);
    applyNetSnapshot(st.snapshot);lastEvent=seq;roomSeq=seq;
    roomStatus('Состояние восстановлено из контрольного снимка.');
   });
  }else{
   requestQueue=requestQueue.then(()=>{
-   if(seq<=lastEvent)return;
+   if(room!==roomRef||generation!==roomSessionGeneration||seq<=lastEvent)return;
    applyNetSnapshot(st.snapshot);lastEvent=seq;roomSeq=seq;
    roomStatus('Состояние игры синхронизировано после пропуска события.');
   });
