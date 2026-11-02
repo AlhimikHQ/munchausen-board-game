@@ -46,7 +46,7 @@
         "requests": {
           ".read": "auth != null && root.child('rooms').child($roomCode).child('meta').child('hostUid').val() === auth.uid",
           "$requestId": {
-            ".write": "auth != null && !data.exists() && newData.exists() && newData.child('requestId').val() === $requestId && newData.child('uid').val() === auth.uid && root.child('rooms').child($roomCode).child('meta').child('status').val() === 'started' && root.child('rooms').child($roomCode).child('state').child('activeUid').val() === auth.uid && root.child('rooms').child($roomCode).child('state').child('turnToken').val() === newData.child('turnToken').val() && !root.child('rooms').child($roomCode).child('state').child('processing').exists()",
+            ".write": "auth != null && !data.exists() && newData.exists() && newData.child('requestId').val() === $requestId && newData.child('uid').val() === auth.uid && root.child('rooms').child($roomCode).child('members').child(auth.uid).exists() && root.child('rooms').child($roomCode).child('meta').child('status').val() === 'started' && root.child('rooms').child($roomCode).child('state').child('activeUid').val() === auth.uid && root.child('rooms').child($roomCode).child('state').child('turnToken').val() === newData.child('turnToken').val() && !root.child('rooms').child($roomCode).child('state').child('processing').exists()",
             ".validate": "newData.hasChildren(['requestId','uid','roll','turnToken','launchState','diceState','createdAt']) && newData.child('uid').val() === auth.uid && (newData.child('roll').val() === 1 || newData.child('roll').val() === 2 || newData.child('roll').val() === 3 || newData.child('roll').val() === 4 || newData.child('roll').val() === 5 || newData.child('roll').val() === 6) && newData.child('turnToken').isString() && newData.child('launchState').numChildren() === 24 && newData.child('diceState').numChildren() === 24 && newData.child('createdAt').isNumber()",
             "launchState": {
               "$index": {
@@ -59,7 +59,8 @@
               }
             }
           }
-        }
+        },
+        ".validate": "$roomCode.matches(/^[1-6]{3}$/) && newData.hasChildren(['meta','slots','members','settings','state'])"
       }
     }
   }
