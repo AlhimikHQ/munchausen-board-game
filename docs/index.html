@@ -180,7 +180,7 @@ fl.connect(g);g.connect(OUT);[...os,lf].forEach(x=>{x.start(t);x.stop(t+dur+.05)
 function failSnd(){if(!AC)return;const L=LV.fail;[[311,0,.22],[294,.26,.22],[277,.52,.22],[262,.78,1.0]].forEach((a,k)=>mute(a[0],a[1],a[2],.36*L,k==3))}
 addEventListener('pointerdown',audioInit);
 
-const awaiting=()=>started&&!busy&&!over;
+const awaiting=()=>started&&!busy&&!over&&!P.some(p=>p.anim);
 /* Firebase multiplayer: host validates turns and publishes authoritative dice results. */
 const firebaseConfig={apiKey:"AIzaSyClRq2KotMI-ajRV_pWGG2t1eqRYKy6Q_I",authDomain:"board-games-n1.firebaseapp.com",databaseURL:"https://board-games-n1-default-rtdb.europe-west1.firebasedatabase.app",projectId:"board-games-n1",storageBucket:"board-games-n1.firebasestorage.app",messagingSenderId:"797191791563",appId:"1:797191791563:web:4f1c5ce0acaf15ceb24c4e"};
 let netMode=false,fbUser=null,roomRef=null,roomCode='',isHost=false,myIndex=-1,memberList=[],lastEvent=0,roomSeq=0,roomMaxPlayers=3,roomStarting=false,requestQueue=Promise.resolve(),pendingEventResolve=null,remoteDiceResolve=null;
@@ -328,7 +328,7 @@ function watchRoomState(){
   });
  }
 }
-function awaitingOrDraw(){return started&&!busy&&!over;}
+function awaitingOrDraw(){return awaiting();}
 function initNetworkBoard(players){
  started=true;over=false;busy=false;np=players.length;
  const defaults=['#e02020','#1e5bff','#1faa3c','#ffe94d','#fff'];
@@ -420,7 +420,7 @@ async function publishRoll(roll,actorUid=fbUser.uid,launchState=V.netLaunchState
 }
 function netRoll(roll,launchState=V.netLaunchState,diceState=Array.from(S)){
  if(!netMode){play(roll);return;}
- if(!started)return;
+ if(!started||!awaitingOrDraw())return;
  if(isHost){requestQueue=requestQueue.then(()=>publishRoll(roll,fbUser.uid,launchState,diceState)).catch(e=>console.error('publish roll',e));return;}
  const active=mode==='draw'?dl[di]:cur;
  if(!memberList[active]||memberList[active].uid!==fbUser.uid)return;
