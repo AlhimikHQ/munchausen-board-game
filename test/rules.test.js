@@ -91,6 +91,9 @@ test("host can approve a player; a member can read the admitted room", async () 
   }));
   await assertSucceeds(get(ref(guest, "rooms/123/state")));
   await assertSucceeds(get(ref(guest, "rooms/123/members")));
+  await assertFails(get(ref(guest, "rooms/123")));
+  await assertFails(get(ref(guest, "rooms/123/requests")));
+  await assertFails(get(ref(guest, "rooms/123/joinRequests/other")));
 });
 
 test("a room cannot be overfilled by join requests", async () => {
