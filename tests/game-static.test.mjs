@@ -44,6 +44,13 @@ test('room codes contain exactly three dice', () => {
   assert.ok(source.includes("function roomCodeValid(code){return typeof code==='string'&&/^[1-6]{3}$/.test(code);}"));
 });
 
+test('host room transactions retry when the local Firebase cache initially returns null', () => {
+  assert.ok(source.includes('function roomTransaction(updateFn)'));
+  assert.ok(source.includes('current=>current===null?null:updateFn(current)'));
+  assert.equal((source.match(/roomTransaction\(/g) || []).length, 6);
+  assert.ok(!source.includes('roomRef.transaction('));
+});
+
 test('the turn pipeline locks a turn and commits event, snapshot and sequence atomically', () => {
   assert.ok(source.includes('function processRollRequest(request,requestId)'));
   assert.ok(source.includes('state.turnToken!==request.turnToken'));
