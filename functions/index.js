@@ -9,11 +9,12 @@ initializeApp();
 
 const CLOSED_ROOM_RETENTION_MS = 10 * 60 * 1000;
 const ABANDONED_ROOM_RETENTION_MS = 24 * 60 * 60 * 1000;
+const JOIN_REQUEST_RETENTION_MS = 10 * 60 * 1000;
 
 /**
- * Removes closed lobbies and games whose host presence has been offline
- * for more than 24 hours. Presence is written by Realtime Database
- * onDisconnect(), so it also works when a device loses power or the app dies.
+ * Deletes closed/abandoned rooms and expires unapproved join requests.
+ * Realtime Database onDisconnect presence markers are the source of truth
+ * for an unexpectedly disconnected host.
  */
 exports.cleanupAbandonedRooms = onSchedule(
   {
@@ -26,7 +27,9 @@ exports.cleanupAbandonedRooms = onSchedule(
     const roomsRef = getDatabase().ref("rooms");
     const snapshot = await roomsRef.get();
     const now = Date.now();
-    const removals = {};
+    const updates = {};
+    let removedRooms = 0;
+    let removedRequests = 0;
 
     snapshot.forEach((roomSnapshot) => {
       const room = roomSnapshot.val() || {};
@@ -47,18 +50,29 @@ exports.cleanupAbandonedRooms = onSchedule(
         now - lastActivityAt >= ABANDONED_ROOM_RETENTION_MS;
 
       if (closedAndExpired || hostGoneAndExpired) {
-        removals[roomSnapshot.key] = null;
+        updates[roomSnapshot.key] = null;
+        removedRooms += 1;
+        return;
       }
+
+      const requests = roomSnapshot.child("joinRequests");
+      requests.forEach((requestSnapshot) => {
+        const createdAt = Number((requestSnapshot.val() || {}).createdAt || 0);
+        if (createdAt > 0 && now - createdAt >= JOIN_REQUEST_RETENTION_MS) {
+          updates[roomSnapshot.key + "/joinRequests/" + requestSnapshot.key] = null;
+          removedRequests += 1;
+        }
+      });
     });
 
-    const roomCodes = Object.keys(removals);
-    if (roomCodes.length) {
-      await roomsRef.update(removals);
+    if (Object.keys(updates).length) {
+      await roomsRef.update(updates);
     }
 
     logger.info("Room cleanup completed", {
       scanned: snapshot.numChildren(),
-      removed: roomCodes.length
+      removedRooms,
+      removedRequests
     });
   }
 );
