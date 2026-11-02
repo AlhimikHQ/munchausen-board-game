@@ -189,7 +189,7 @@ let netMode=false,fbUser=null,roomRef=null,roomCode='',isHost=false,myIndex=-1,m
 let roomTurnToken='',roomExpectedUid='',roomProcessing=false,lastEvent=0,roomSeq=0,roomMaxPlayers=3,roomStarting=false,roomStartPending=false;
 let requestQueue=Promise.resolve(),eventQueue=Promise.resolve(),pendingNetEvents=Object.create(null);
 let authError='',authPromise=null,authStateUnsub=null,connectionRef=null,connectionState=null,roomListeners=[];
-let remoteDiceResolve=null,remoteDiceTimer=0,roomCreatePending=false,roomJoinPending=false,netUiEpoch=0,presenceHeartbeatTimer=0,staleLockRecoveryTimer=0;
+let remoteDiceResolve=null,remoteDiceTimer=0,roomCreatePending=false,roomJoinPending=false,netUiEpoch=0,presenceHeartbeatTimer=0,staleLockRecoveryTimer=0,snapshotRecoveryTimer=0;
 const roomStatus=()=>{};
 function withTimeout(promise,ms,message){return new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(new Error(message||'Firebase timeout')),ms);Promise.resolve(promise).then(value=>{clearTimeout(timer);resolve(value);},error=>{clearTimeout(timer);reject(error);});});}
 function netErr(error){const code=(error&&error.code)||'',message=(error&&error.message)||String(error||'');if(/permission[_-]denied/i.test(code+' '+message))return'permission-denied';if(/operation-not-allowed/i.test(code+' '+message))return'anonymous-auth-disabled';if(/network|disconnected|unavailable/i.test(code+' '+message))return'network-unavailable';return code||'firebase-error';}
@@ -350,7 +350,7 @@ function watchRoomState(){
   const state=snap.val();if(!state){if(netMode)leaveNetworkSetup(false);return;}
   roomSeq=Number(state.seq)||0;roomTurnToken=state.turnToken||'';roomExpectedUid=state.activeUid||'';roomProcessing=!!state.processing;
   if(state.status==='started'&&!started)startNetworkGame(state.players||[],state.snapshot||null,roomSeq,state.turnToken,state.activeUid);
-  else if(state.status==='started'&&started&&roomSeq>lastEvent+1)recoverRoomSnapshot().catch(e=>console.warn('Firebase snapshot recovery:',netErr(e)));
+  else if(state.status==='started'&&started&&roomSeq>lastEvent+1)scheduleSnapshotRecovery();
  });
  const events=roomRef.child('events').orderByKey().limitToLast(ROOM_EVENT_LIMIT);
  listenRoom(events,'child_added',snap=>{
@@ -455,10 +455,19 @@ async function recoverRoomSnapshot(){
  applyNetSnapshot(state.snapshot);lastEvent=Number(state.seq)||lastEvent;roomSeq=lastEvent;roomTurnToken=state.turnToken||roomTurnToken;roomExpectedUid=state.activeUid||roomExpectedUid;
  Object.keys(pendingNetEvents).forEach(k=>{if(Number(k)<=lastEvent)delete pendingNetEvents[k];});
 }
+function scheduleSnapshotRecovery(){
+ if(snapshotRecoveryTimer||!roomRef)return;
+ snapshotRecoveryTimer=setTimeout(async()=>{
+  snapshotRecoveryTimer=0;
+  try{await recoverRoomSnapshot();drainNetEvents();}catch(e){console.warn('Firebase delayed snapshot recovery:',netErr(e),e);}
+ },1200);
+}
+function cancelSnapshotRecovery(){if(snapshotRecoveryTimer){clearTimeout(snapshotRecoveryTimer);snapshotRecoveryTimer=0;}}
 function drainNetEvents(){
  eventQueue=eventQueue.then(async()=>{
   while(pendingNetEvents[lastEvent+1]){const seq=lastEvent+1,event=pendingNetEvents[seq];delete pendingNetEvents[seq];await runNetEvent(event);lastEvent=seq;}
-  const keys=Object.keys(pendingNetEvents).map(Number).filter(Number.isFinite).sort((a,b)=>a-b);if(keys.length&&keys[0]>lastEvent+1)await recoverRoomSnapshot();
+  const keys=Object.keys(pendingNetEvents).map(Number).filter(Number.isFinite).sort((a,b)=>a-b);
+  if(keys.length&&keys[0]>lastEvent+1)scheduleSnapshotRecovery();else cancelSnapshotRecovery();
  }).catch(e=>console.warn('Firebase event queue:',netErr(e),e));
 }
 async function recoverStaleProcessingLock(){
@@ -579,7 +588,7 @@ async function restoreRoomConnection(){
 }
 async function leaveNetworkSetup(persist=true){
  const ref=roomRef,uid=fbUser&&fbUser.uid,host=isHost,seat=mySeat,active=netMode;
- if(staleLockRecoveryTimer){clearTimeout(staleLockRecoveryTimer);staleLockRecoveryTimer=0;}
+ if(staleLockRecoveryTimer){clearTimeout(staleLockRecoveryTimer);staleLockRecoveryTimer=0;}cancelSnapshotRecovery();
  const preserveActiveGuest=active&&!host&&(roomMeta&&roomMeta.status==='started'||started);
  stopPresenceHeartbeat();stopRoomListeners();
  netMode=false;isHost=false;roomCode='';roomRef=null;memberList=[];networkPlayers=[];roomMeta=null;myIndex=-1;mySeat=-1;
