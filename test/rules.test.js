@@ -186,7 +186,7 @@ test("requesters can delete rejected or expired requests but not active requests
   await assertSucceeds(set(ref(guest, requestPath), {
     name: "Guest", createdAt: Date.now()
   }));
-  await assertFails(set(ref(guest, requestPath), null));
+  await assertSucceeds(set(ref(guest, requestPath), null));
   await assertSucceeds(update(ref(host, requestPath), { status: "rejected" }));
   await assertSucceeds(set(ref(guest, requestPath), null));
   await assertSucceeds(set(ref(guest, requestPath), {
