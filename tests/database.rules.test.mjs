@@ -64,10 +64,11 @@ test('unauthenticated clients cannot enumerate rooms', async () => {
   await assertFails(get(ref(db, roomPath)));
 });
 
-test('authenticated non-members can see room metadata, not private room state', async () => {
+test('authenticated non-members can see public metadata but not private room data', async () => {
   const db = env.authenticatedContext('intruder').database();
   await assertSucceeds(get(ref(db, roomPath + '/meta')));
   await assertFails(get(ref(db, roomPath)));
+  await assertFails(get(ref(db, roomPath + '/slots/0')));
   await assertFails(get(ref(db, roomPath + '/members')));
   await assertFails(get(ref(db, roomPath + '/settings')));
   await assertFails(get(ref(db, roomPath + '/state')));
@@ -75,7 +76,13 @@ test('authenticated non-members can see room metadata, not private room state', 
   await assertFails(get(ref(db, roomPath + '/requests')));
 });
 
-test('a member can read the shared board and member list', async () => {
+test('a user can inspect their own membership node before joining', async () => {
+  const db = env.authenticatedContext('new-player').database();
+  await assertSucceeds(get(ref(db, roomPath + '/members/new-player')));
+  await assertFails(get(ref(db, roomPath + '/members')));
+});
+
+test('room members can read the shared board and member list', async () => {
   const db = memberDb();
   await assertSucceeds(get(ref(db, roomPath + '/members')));
   await assertSucceeds(get(ref(db, roomPath + '/settings')));
@@ -97,17 +104,18 @@ test('a member can update their own ready state and colour, but not another seat
   await assertFails(set(ref(db, roomPath + '/settings/colors/0'), '#aabbcc'));
 });
 
-test('only the active player can submit a request for the current turn', async () => {
+test('a member can create only one valid current-turn request under their UID', async () => {
   const db = memberDb();
   const numericState = Array.from({ length: 24 }, () => 0);
   const request = {
-    requestId: 'req-1', uid: 'player-1', roll: 4, turnToken: 'turn-0-player-1',
+    requestId: 'player-1', uid: 'player-1', roll: 4, turnToken: 'turn-0-player-1',
     launchState: numericState, diceState: numericState, createdAt: 1700000000000
   };
-  await assertSucceeds(set(ref(db, roomPath + '/requests/req-1'), request));
-  await assertFails(set(ref(db, roomPath + '/requests/req-2'), { ...request, requestId: 'req-2', uid: 'player-2' }));
-  await assertFails(set(ref(db, roomPath + '/requests/req-3'), { ...request, requestId: 'req-3', turnToken: 'stale-token' }));
-  await assertFails(set(ref(db, roomPath + '/requests/req-4'), { ...request, requestId: 'req-4', roll: 7 }));
+  await assertFails(set(ref(db, roomPath + '/requests/player-1'), { ...request, turnToken: 'stale-token' }));
+  await assertFails(set(ref(db, roomPath + '/requests/player-1'), { ...request, roll: 7 }));
+  await assertSucceeds(set(ref(db, roomPath + '/requests/player-1'), request));
+  await assertFails(set(ref(db, roomPath + '/requests/player-1'), request));
+  await assertFails(set(ref(db, roomPath + '/requests/player-2'), { ...request, requestId: 'player-2' }));
   await assertFails(get(ref(db, roomPath + '/requests')));
 });
 
