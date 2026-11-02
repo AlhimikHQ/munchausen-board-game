@@ -1,13 +1,13 @@
 "use strict";
 
-const test = require("node:test");
-const fs = require("node:fs");
-const {
+import test from "node:test";
+import fs from "node:fs";
+import {
   initializeTestEnvironment,
   assertSucceeds,
   assertFails
-} = require("@firebase/rules-unit-testing");
-const { ref, get, set, update } = require("firebase/database");
+} from "@firebase/rules-unit-testing";
+import { ref, get, set, update } from "firebase/database";
 
 const projectId = "demo-munchausen-board-game";
 let env;
@@ -187,4 +187,41 @@ test("only a current member can take over an offline host", async () => {
   const outsider = env.authenticatedContext("outsider").database();
   await assertSucceeds(set(ref(guest, "rooms/123/hostUid"), "guest"));
   await assertFails(set(ref(outsider, "rooms/123/hostUid"), "outsider"));
+});
+
+test("room creation is an atomic write; active rooms cannot be overwritten", async () => {
+  const owner = env.authenticatedContext("owner").database();
+  const outsider = env.authenticatedContext("outsider").database();
+  await assertSucceeds(set(ref(owner, "rooms/456"), makeRoom({
+    hostUid: "owner",
+    members: {
+      owner: { name: "Owner", seat: 0, ready: false, online: false, color: "#e02020" }
+    }
+  })));
+  await assertSucceeds(get(ref(owner, "rooms/456/state")));
+  await assertFails(set(ref(outsider, "rooms/123"), makeRoom({
+    hostUid: "outsider",
+    members: {
+      outsider: { name: "Outsider", seat: 0, online: true }
+    }
+  })));
+  const host = env.authenticatedContext("host").database();
+  await assertFails(set(ref(host, "rooms/123"), makeRoom()));
+});
+
+test("host child updates remain allowed but guests cannot promote themselves", async () => {
+  await seedRoom(makeRoom({
+    members: {
+      host: { name: "Host", seat: 0, online: true },
+      guest: { name: "Guest", seat: 1, online: true }
+    }
+  }));
+  const host = env.authenticatedContext("host").database();
+  const guest = env.authenticatedContext("guest").database();
+  await assertSucceeds(set(ref(host, "rooms/123/state"), {
+    status: "started", seq: 0, turnUid: "host", snapshot: { version: 3 }
+  }));
+  await assertFails(set(ref(guest, "rooms/123/state"), {
+    status: "started", seq: 0, turnUid: "guest", snapshot: { version: 3 }
+  }));
 });
