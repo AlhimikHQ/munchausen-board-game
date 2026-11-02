@@ -195,7 +195,7 @@ const ROOM_REUSE_MS=60*1000,ROOM_ABANDON_MS=24*60*60*1000;
 const DEFAULT_COLORS=['#e02020','#1e5bff','#1faa3c','#ffe94d','#fff'];
 let netMode=false,fbUser=null,roomRef=null,roomCode='',isHost=false,myIndex=-1,memberList=[];
 let lastEvent=0,roomSeq=0,roomMaxPlayers=3,roomStarting=false,publishingSeq=0,hostUidCurrent='';
-let rollRequestListener=null;
+let rollRequestListener=null,offlinePruneTimer=null;
 let requestQueue=Promise.resolve(),authError='',authPromise=null;
 let connectionRef=null,connectionHandler=null,roomStatusRef=null,requestListener=null;
 let roomJoinPending=false,roomCreatePending=false,netUiEpoch=0;
@@ -225,7 +225,8 @@ function installConnectionListener(){
   if(!connected){if(netMode)roomStatus('Нет связи с сервером. Идёт переподключение…');return;}
   if(!netMode||!roomRef||!fbUser)return;
   const onlineRef=roomRef.child('members/'+fbUser.uid+'/online');
-  onlineRef.onDisconnect().set(false).then(()=>onlineRef.set(true)).then(async()=>{
+  const offlineRef=roomRef.child('members/'+fbUser.uid+'/offlineAt');
+  Promise.all([onlineRef.onDisconnect().set(false),offlineRef.onDisconnect().set(firebase.database.ServerValue.TIMESTAMP)]).then(()=>onlineRef.set(true)).then(()=>offlineRef.remove()).then(async()=>{
    roomStatus('Связь восстановлена.');
    if(isHost)roomRef.child('state/lastActivityAt').set(firebase.database.ServerValue.TIMESTAMP).catch(()=>{});
    const st=await roomRef.child('state').once('value');
@@ -288,7 +289,7 @@ function isMyTurn(){
 }
 function updateLobbyControls(){
  if(!netMode||started)return;
- const full=memberList.length===roomMaxPlayers;
+ const full=memberList.length===roomMaxPlayers&&memberList.every(m=>m.online!==false);
  const me=memberList.find(m=>m.uid===fbUser?.uid);
  const ready=!!(me&&me.ready);
  const go=$('#go');
@@ -328,7 +329,7 @@ async function approveRoomRequest(uid,approve){
    const members=current||{};
    if(members[uid]||Object.keys(members).length>=roomMaxPlayers)return;
    const seat=Object.keys(members).length;
-   members[uid]={name:String(request.name||('Игрок '+(seat+1))).slice(0,32),seat,ready:false,online:true,color:DEFAULT_COLORS[seat],joinedAt:firebase.database.ServerValue.TIMESTAMP};
+   members[uid]={name:String(request.name||('Игрок '+(seat+1))).slice(0,32),seat,ready:false,online:false,color:DEFAULT_COLORS[seat],joinedAt:firebase.database.ServerValue.TIMESTAMP};
    return members;
   },null,false);
   if(!tx.committed){roomStatus('Комната уже заполнена.');return;}
@@ -371,6 +372,8 @@ function watchMembers(){
  roomRef.child('members').on('value',snap=>{
   memberList=[];snap.forEach(x=>memberList.push({uid:x.key,...(x.val()||{})}));
   memberList.sort((a,b)=>(Number(a.seat)||0)-(Number(b.seat)||0));
+  if(offlinePruneTimer)clearTimeout(offlinePruneTimer);
+  if(isHost&&memberList.some(m=>m.uid!==fbUser?.uid&&m.online===false&&Number(m.offlineAt||0)>0))offlinePruneTimer=setTimeout(maybePruneOfflineMembers,30000);
   myIndex=memberList.findIndex(m=>m.uid===fbUser?.uid);
   const defaults=DEFAULT_COLORS.slice();
   memberList.forEach((m,i)=>{if(m.color)defaults[i]=m.color});
@@ -403,6 +406,13 @@ async function maybeElectHost(){
   if(tx.committed){isHost=true;startHostRequestListener();}
  }catch(e){console.warn('host election',e);}
 }
+function maybePruneOfflineMembers(){
+ if(!isHost||!roomRef||started)return;
+ const now=Date.now();
+ memberList.filter(m=>m.uid!==fbUser?.uid&&m.online===false&&Number(m.offlineAt||0)>0&&now-Number(m.offlineAt)>=30000).forEach(m=>{
+  roomRef.child('members/'+m.uid).remove().catch(e=>console.warn('remove stale lobby member',e));
+ });
+}
 function currentTurnUid(){
  const active=activePlayerIndex();
  return active==null||!memberList[active]?null:memberList[active].uid;
@@ -410,7 +420,7 @@ function currentTurnUid(){
 function nextTurnUid(){return currentTurnUid()}
 function maybeStartNetworkGame(){
  if(!isHost||started||roomStarting||memberList.length!==roomMaxPlayers||!memberList.length)return;
- if(!memberList.every(m=>m.ready))return;
+ if(!memberList.every(m=>m.ready&&m.online!==false))return;
  roomStarting=true;
  const players=memberList.slice(0,roomMaxPlayers).map((m,i)=>({uid:m.uid,name:m.name||('Игрок '+(i+1)),color:m.color||COL[i]||DEFAULT_COLORS[i]}));
  startNetworkGame(players,null,roomSeq).catch(e=>{roomStarting=false;roomStatus('Не удалось запустить игру: '+netErr(e));});
@@ -431,7 +441,7 @@ async function createRoom(){
     return {
      hostUid:fbUser.uid,createdAt:firebase.database.ServerValue.TIMESTAMP,maxPlayers:roomMaxPlayers,
      settings:{playerCount:roomMaxPlayers,updatedAt:firebase.database.ServerValue.TIMESTAMP},
-     members:{[fbUser.uid]:{name:'Игрок 1',seat:0,ready:false,online:true,color:COL[0]||DEFAULT_COLORS[0],joinedAt:firebase.database.ServerValue.TIMESTAMP}},
+     members:{[fbUser.uid]:{name:'Игрок 1',seat:0,ready:false,online:false,color:COL[0]||DEFAULT_COLORS[0],joinedAt:firebase.database.ServerValue.TIMESTAMP}},
      state:{status:'lobby',seq:0,turnUid:null,lastActivityAt:firebase.database.ServerValue.TIMESTAMP}
     };
    },null,false),15000,'Сервер Firebase не ответил');
@@ -440,8 +450,9 @@ async function createRoom(){
   }
   if(!created)throw new Error('Свободный код комнаты не найден. Попробуйте ещё раз.');
   roomCode=code;roomRef=created;isHost=true;netMode=true;roomSeq=0;lastEvent=0;myIndex=0;
-  await roomRef.child('members/'+fbUser.uid+'/online').onDisconnect().set(false);
-  await roomRef.child('members/'+fbUser.uid+'/online').set(true);
+  const onlineRef=roomRef.child('members/'+fbUser.uid+'/online'),offlineRef=roomRef.child('members/'+fbUser.uid+'/offlineAt');
+  await Promise.all([onlineRef.onDisconnect().set(false),offlineRef.onDisconnect().set(firebase.database.ServerValue.TIMESTAMP)]);
+  await onlineRef.set(true);await offlineRef.remove();
   showRoomCode(roomCode);watchMembers();watchRoomState();
   $('#roomCreate').hidden=false;$('#netJoinToggle').hidden=true;$('#roomCodeDisplay').hidden=false;$('#roomJoinDice').hidden=true;$('#joinSlot').hidden=false;
   $('#pm').disabled=true;$('#pp').disabled=true;$('#roomCreate').disabled=true;$('#roomJoinConfirm').disabled=true;
@@ -487,8 +498,9 @@ async function joinRoom(){
   await requestRef.onDisconnect().cancel();
   roomCode=code;roomRef=ref;netMode=true;isHost=false;roomSeq=0;lastEvent=0;myIndex=Number(member.seat)||0;
   np=roomMaxPlayers;$('#pn').textContent=np;
-  await ref.child('members/'+uid+'/online').onDisconnect().set(false);
-  await ref.child('members/'+uid+'/online').set(true);
+  const onlineRef=ref.child('members/'+uid+'/online'),offlineRef=ref.child('members/'+uid+'/offlineAt');
+  await Promise.all([onlineRef.onDisconnect().set(false),offlineRef.onDisconnect().set(firebase.database.ServerValue.TIMESTAMP)]);
+  await onlineRef.set(true);await offlineRef.remove();
   watchMembers();watchRoomState();showRoomCode(code);
   $('#roomJoinDice').hidden=true;$('#roomCodeDisplay').hidden=false;$('#joinSlot').hidden=false;
   $('#roomCreate').hidden=true;$('#netJoinToggle').hidden=true;$('#pm').disabled=true;$('#pp').disabled=true;
@@ -678,6 +690,7 @@ function leaveNetworkSetup(){
   (async()=>{
    try{
     await onlineRef.onDisconnect().cancel();
+    await ref.child('members/'+uid+'/offlineAt').onDisconnect().cancel();
     if(active&&host)await ref.child('state').update({status:'closed',closedAt:firebase.database.ServerValue.TIMESTAMP,turnUid:null});
     else if(active&&uid)await ref.child('members/'+uid).remove();
    }catch(e){console.warn('room cleanup',e)}
