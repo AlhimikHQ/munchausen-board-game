@@ -86,9 +86,9 @@ test("host can approve a player; a member can read the admitted room", async () 
   await assertSucceeds(set(ref(guest, "rooms/123/joinRequests/guest"), {
     name: "Guest", createdAt: Date.now()
   }));
-  await assertSucceeds(set(ref(host, "rooms/123/members/guest"), {
-    name: "Guest", seat: 1, ready: false, online: true,
-    color: "#1e5bff", joinedAt: Date.now()
+  await assertSucceeds(set(ref(host, "rooms/123/members"), {
+    host: { name: "Host", seat: 0, online: true, ready: true, color: "#e02020" },
+    guest: { name: "Guest", seat: 1, ready: false, online: true, color: "#1e5bff", joinedAt: Date.now() }
   }));
   await assertSucceeds(get(ref(guest, "rooms/123/state")));
   await assertSucceeds(get(ref(guest, "rooms/123/members")));
