@@ -21,7 +21,7 @@ function shouldRemoveRoom(room, now = Date.now()) {
     lastActivityAt > 0 &&
     now - lastActivityAt >= ABANDONED_ROOM_RETENTION_MS;
 
-  return closedAndExpired || hostGoneAndExpired;
+  return Boolean(closedAndExpired || hostGoneAndExpired);
 }
 
 function expiredJoinRequestKeys(joinRequests, now = Date.now()) {
