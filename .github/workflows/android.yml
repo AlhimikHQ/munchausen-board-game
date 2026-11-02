@@ -18,10 +18,10 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Node.js 22
+      - name: Set up Node.js 24.12
         uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: '24.12.0'
 
       - name: Set up JDK 17 for Firebase emulator
         uses: actions/setup-java@v4
