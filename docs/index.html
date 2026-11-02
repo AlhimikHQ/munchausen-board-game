@@ -523,6 +523,7 @@ async function restoreRoomConnection(){
  if(!member.exists()){leaveNetworkSetup(false);return;}
  await memberRef.update({connected:true,lastSeenAt:Date.now()});
  await memberRef.onDisconnect().update({connected:false,ready:false,lastSeenAt:firebase.database.ServerValue.TIMESTAMP});
+ startPresenceHeartbeat();
  const state=(await ref.child('state').once('value')).val();
  if(state&&started&&Number(state.seq)>lastEvent+1)await recoverRoomSnapshot();
 }
