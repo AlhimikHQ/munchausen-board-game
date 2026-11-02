@@ -189,7 +189,7 @@ let netMode=false,fbUser=null,roomRef=null,roomCode='',isHost=false,myIndex=-1,m
 let roomTurnToken='',roomExpectedUid='',roomProcessing=false,lastEvent=0,roomSeq=0,roomMaxPlayers=3,roomStarting=false,roomStartPending=false;
 let requestQueue=Promise.resolve(),eventQueue=Promise.resolve(),pendingNetEvents=Object.create(null);
 let authError='',authPromise=null,authStateUnsub=null,connectionRef=null,connectionState=null,roomListeners=[];
-let remoteDiceResolve=null,remoteDiceTimer=0,roomCreatePending=false,roomJoinPending=false,netUiEpoch=0;
+let remoteDiceResolve=null,remoteDiceTimer=0,roomCreatePending=false,roomJoinPending=false,netUiEpoch=0,presenceHeartbeatTimer=0;
 const roomStatus=()=>{};
 function withTimeout(promise,ms,message){return new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(new Error(message||'Firebase timeout')),ms);Promise.resolve(promise).then(value=>{clearTimeout(timer);resolve(value);},error=>{clearTimeout(timer);reject(error);});});}
 function netErr(error){const code=(error&&error.code)||'',message=(error&&error.message)||String(error||'');if(/permission[_-]denied/i.test(code+' '+message))return'permission-denied';if(/operation-not-allowed/i.test(code+' '+message))return'anonymous-auth-disabled';if(/network|disconnected|unavailable/i.test(code+' '+message))return'network-unavailable';return code||'firebase-error';}
@@ -220,6 +220,14 @@ function changeJoinDie(index,step){if(!Number.isInteger(index)||index<0||index>=
 function showRoomCode(code){const e=$('#roomCodeDisplay');if(e)e.innerHTML=[...code].map((v,i)=>dieMarkup(+v,i,false)).join('');}
 function listenRoom(target,event,callback){target.on(event,callback);roomListeners.push({target,event,callback});}
 function stopRoomListeners(){roomListeners.forEach(x=>{try{x.target.off(x.event,x.callback);}catch(e){}});roomListeners=[];}
+function startPresenceHeartbeat(){
+ if(presenceHeartbeatTimer)clearInterval(presenceHeartbeatTimer);
+ if(!roomRef||!fbUser)return;
+ const presenceRef=roomRef.child('members/'+fbUser.uid);
+ const heartbeat=()=>presenceRef.update({connected:true,lastSeenAt:Date.now()}).catch(e=>console.warn('Firebase presence heartbeat:',netErr(e),e));
+ heartbeat();presenceHeartbeatTimer=setInterval(heartbeat,60000);
+}
+function stopPresenceHeartbeat(){if(presenceHeartbeatTimer){clearInterval(presenceHeartbeatTimer);presenceHeartbeatTimer=0;}}
 function makeTurnToken(seq,uid){const nonce=window.crypto&&crypto.randomUUID?crypto.randomUUID():Math.random().toString(36).slice(2)+Date.now().toString(36);return String(seq)+':'+String(uid||'none')+':'+nonce;}
 function roomCodeValid(code){return typeof code==='string'&&/^[1-6]{3}$/.test(code);}
 function saveRoomCode(code){try{localStorage.setItem(ROOM_STORAGE_KEY,code);}catch(e){console.warn('Room session storage:',netErr(e));}}
@@ -290,6 +298,7 @@ async function createRoom(){
   roomCode=code;roomRef=created;isHost=true;netMode=true;myIndex=0;mySeat=0;saveRoomCode(code);
   const hostPresence=roomRef.child('members/'+fbUser.uid);
   await hostPresence.onDisconnect().update({connected:false,ready:false,lastSeenAt:firebase.database.ServerValue.TIMESTAMP});
+  startPresenceHeartbeat();
   showRoomCode(roomCode);watchMembers();watchRoomState();
   $('#roomCreate').hidden=false;$('#netJoinToggle').hidden=true;$('#roomCodeDisplay').hidden=false;$('#roomJoinDice').hidden=true;$('#joinSlot').hidden=false;
   $('#pm').disabled=true;$('#pp').disabled=true;$('#roomCreate').disabled=true;$('#roomJoinConfirm').disabled=true;updateLobbyControls();
@@ -324,8 +333,8 @@ async function joinRoom(){
   }
   if(stale()){if(createdMember){try{await memberRef.remove();await ref.child('slots/'+claimedSeat).remove();}catch(e){}}return;}
   await memberRef.update({connected:true,lastSeenAt:Date.now()});
-  await memberRef.onDisconnect().update({connected:false,lastSeenAt:firebase.database.ServerValue.TIMESTAMP});
-  roomCode=code;roomRef=ref;netMode=true;isHost=meta.hostUid===fbUser.uid;mySeat=claimedSeat;myIndex=claimedSeat;saveRoomCode(code);
+  await memberRef.onDisconnect().update({connected:false,ready:false,lastSeenAt:firebase.database.ServerValue.TIMESTAMP});
+  roomCode=code;roomRef=ref;netMode=true;isHost=meta.hostUid===fbUser.uid;mySeat=claimedSeat;myIndex=claimedSeat;saveRoomCode(code);startPresenceHeartbeat();
   showRoomCode(code);watchMembers();watchRoomState();
   $('#roomJoinDice').hidden=true;$('#roomCodeDisplay').hidden=false;$('#joinSlot').hidden=false;
   $('#roomCreate').hidden=!isHost;$('#netJoinToggle').hidden=true;$('#pm').disabled=true;$('#pp').disabled=true;
@@ -498,9 +507,9 @@ async function restoreSavedRoom(){
   const seat=Number(member.seat);
   if(!Number.isInteger(seat)||seat<0||seat>=Number(meta.maxPlayers)){clearSavedRoomCode();return;}
   await memberRef.update({connected:true,lastSeenAt:Date.now()});
-  await memberRef.onDisconnect().update({connected:false,lastSeenAt:firebase.database.ServerValue.TIMESTAMP});
+  await memberRef.onDisconnect().update({connected:false,ready:false,lastSeenAt:firebase.database.ServerValue.TIMESTAMP});
   roomCode=code;roomRef=ref;roomMeta=meta;roomMaxPlayers=Number(meta.maxPlayers)||3;mySeat=seat;
-  netMode=true;isHost=meta.hostUid===fbUser.uid;myIndex=seat;memberList=[];networkPlayers=[];
+  netMode=true;isHost=meta.hostUid===fbUser.uid;myIndex=seat;memberList=[];networkPlayers=[];startPresenceHeartbeat();
   showRoomCode(code);watchMembers();watchRoomState();
   $('#roomCreate').hidden=!isHost;$('#netJoinToggle').hidden=true;$('#roomJoinDice').hidden=true;
   $('#roomCodeDisplay').hidden=false;$('#joinSlot').hidden=false;$('#pm').disabled=true;$('#pp').disabled=true;
@@ -520,7 +529,7 @@ async function restoreRoomConnection(){
 async function leaveNetworkSetup(persist=true){
  const ref=roomRef,uid=fbUser&&fbUser.uid,host=isHost,seat=mySeat,active=netMode;
  const preserveActiveGuest=active&&!host&&(roomMeta&&roomMeta.status==='started'||started);
- stopRoomListeners();
+ stopPresenceHeartbeat();stopRoomListeners();
  netMode=false;isHost=false;roomCode='';roomRef=null;memberList=[];networkPlayers=[];roomMeta=null;myIndex=-1;mySeat=-1;
  roomStarting=false;roomStartPending=false;roomProcessing=false;roomTurnToken='';roomExpectedUid='';roomSeq=0;lastEvent=0;
  pendingNetEvents=Object.create(null);eventQueue=Promise.resolve();requestQueue=Promise.resolve();
@@ -535,7 +544,7 @@ async function leaveNetworkSetup(persist=true){
    const memberRef=ref.child('members/'+uid);
    if(preserveActiveGuest){
     try{await memberRef.update({connected:false,lastSeenAt:Date.now()});}catch(e){console.warn('Firebase presence update:',netErr(e));}
-    try{await memberRef.onDisconnect().update({connected:false,lastSeenAt:firebase.database.ServerValue.TIMESTAMP});}catch(e){console.warn('Firebase onDisconnect:',netErr(e));}
+    try{await memberRef.onDisconnect().update({connected:false,ready:false,lastSeenAt:firebase.database.ServerValue.TIMESTAMP});}catch(e){console.warn('Firebase onDisconnect:',netErr(e));}
    }else{
     try{await memberRef.onDisconnect().cancel();}catch(e){}
     try{await memberRef.remove();}catch(e){console.warn('Firebase member cleanup:',netErr(e));}
