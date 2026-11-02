@@ -167,6 +167,7 @@ test('the host can atomically publish the authoritative game state and event log
   let transactionHostUid = null;
   const result = await assertSucceeds(runTransaction(ref(db, roomPath), current => {
     transactionHostUid = current && current.meta && current.meta.hostUid;
+    if (current === null) return null; // Force the server-side transaction retry when the local room cache is empty.
     if (!current || current.meta.hostUid !== 'host-1') return;
     current.state = {
       status: 'started', seq: 1, activeUid: 'player-1', turnToken: 'turn-1',
