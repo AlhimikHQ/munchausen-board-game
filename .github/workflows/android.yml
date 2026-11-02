@@ -16,57 +16,52 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up Node.js 24
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: '24.12.0'
 
-      - name: Set up JDK 21 for Firebase Emulator
-        uses: actions/setup-java@v5
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '21'
 
-      - name: Install pinned test dependencies
-        run: npm install --no-audit --no-fund
-
-      - name: Install Cloud Functions dependencies
-        run: npm --prefix functions install --no-audit --no-fund
-
-      - name: Run static game protocol tests and Firebase Rules Emulator tests
-        run: npm test
+      - run: npm install --no-audit --no-fund
+      - run: npm --prefix functions install --no-audit --no-fund
+      - run: npm test
 
   build:
-    name: Assemble Android APK
+    name: Build small updateable APK
     needs: test
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 25
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up JDK 17
-        uses: actions/setup-java@v4
+      - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
-      - name: Set up Gradle 8.7
-        uses: gradle/actions/setup-gradle@v4
+      - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.7'
 
-      - name: Build debug APK
-        working-directory: android
-        run: gradle --no-daemon --stacktrace assembleDebug
+      - name: Prepare the fixed public debug signature
+        run: base64 --decode android/munchausen-debug.keystore.base64 > android/munchausen-debug.keystore
 
-      - name: Upload APK
-        uses: actions/upload-artifact@v4
+      - name: Build optimized APK
+        working-directory: android
+        run: gradle --no-daemon assembleRelease
+
+      - name: Remove generated keystore
+        if: always()
+        run: rm -f android/munchausen-debug.keystore
+
+      - uses: actions/upload-artifact@v4
         with:
           name: munchausen-apk
-          path: android/app/build/outputs/apk/debug/app-debug.apk
+          path: android/app/build/outputs/apk/release/app-release.apk
           if-no-files-found: error
           retention-days: 14

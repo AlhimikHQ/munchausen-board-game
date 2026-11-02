@@ -52,13 +52,19 @@ npm test
 
 `test:rules` запускает локальный Firebase Realtime Database Emulator и проверяет запреты на чтение чужого игрового состояния, запись чужого хода, изменение чужого участника и конкурентное выделение одного места двум клиентам. `test:cleanup` проверяет политику срока жизни комнат и синтаксис Cloud Function.
 
-## Сборка APK
+## Android APK
 
-GitHub Actions сначала выполняет статические и Firebase Rules Emulator-тесты. APK собирается только после успешного тестового job.
+GitHub Actions runs the tests and builds an optimized release APK. No GitHub Secrets or manual key setup is required.
 
-Параметры Android: minSdk 26 (Android 8), compileSdk 34, JDK 17, Android Gradle Plugin 8.5.2, Gradle 8.7. Артефакт сборки называется `munchausen-apk`; внутри ZIP находится `app-debug.apk`.
+The repository contains one fixed **public debug signature** in `android/munchausen-debug.keystore.base64`. It is only an Android app identity used to allow updates to install over the previous version; it is not a security secret. Every build uses the same signature.
 
-Текущая версия приложения: **1.2 (versionCode 3)**.
+The release build enables R8 code shrinking and resource shrinking. The CI run number is used for an increasing Android `versionCode`. The APK is uploaded as the `munchausen-apk` artifact.
+
+**One-time migration:** Android cannot install an APK over an existing app when the signing certificate differs. Since older builds used temporary CI debug signatures, the first install of this fixed-signature build may require uninstalling the old app once. After that, new APKs update in place.
+
+Local single-player mode does not load Firebase. The Firebase SDK is loaded only when the network-game panel is opened. Multiplayer turn locks transact only on the small `state` node; state and event changes are sent together in one database update.
+
+Android: minSdk 26 (Android 8), compileSdk 34, JDK 17, Android Gradle Plugin 8.5.2, Gradle 8.7.
 
 ## Веб-версия
 
