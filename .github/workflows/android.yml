@@ -1,4 +1,4 @@
-name: Build Android APK
+name: Audit, test and build Android APK
 
 on:
   push:
@@ -11,7 +11,37 @@ permissions:
   contents: read
 
 jobs:
-  build:
+  firebase-tests:
+    name: Firebase rules and client tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Set up JDK 17 for Firebase emulator
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Install test tools
+        run: npm install --no-audit --no-fund
+
+      - name: Static client and configuration tests
+        run: npm run test:static
+
+      - name: Realtime Database Security Rules emulator tests
+        run: npm run test:rules
+
+  build-android:
+    name: Build and lint Android APK
+    needs: firebase-tests
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -28,9 +58,9 @@ jobs:
         with:
           gradle-version: '8.7'
 
-      - name: Build debug APK
+      - name: Run Android unit tests, lint and APK build
         working-directory: android
-        run: gradle --no-daemon assembleDebug
+        run: gradle --no-daemon testDebugUnitTest lintDebug assembleDebug
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
