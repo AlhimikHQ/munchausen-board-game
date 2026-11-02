@@ -1,0 +1,14 @@
+node_modules/
+functions/node_modules/
+.firebase/
+firebase-debug.log
+firestore-debug.log
+ui-debug.log
+.npm/
+*.log
+
+# Android / Gradle
+.gradle/
+**/.gradle/
+**/build/
+local.properties
