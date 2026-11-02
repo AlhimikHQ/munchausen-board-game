@@ -37,7 +37,7 @@ npx firebase deploy --only database --project board-games-n1
 
 ## Тесты
 
-Требуются Node.js 22 и Java 17.
+Требуются Node.js 24.12+ и JDK 21 для Firebase Emulator. Для Android APK используется JDK 17 и Gradle 8.7.
 
 ```bash
 npm install
