@@ -33,7 +33,7 @@ firebase deploy --only database,functions
 
 ## Проверки и сборка
 
-Требования локального запуска: Node.js 22, Java 17 и Gradle 8.7.
+Требования локального запуска: Node.js 24.12, Java 17 и Gradle 8.7.
 
 ```bash
 npm install
