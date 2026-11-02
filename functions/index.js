@@ -4,15 +4,15 @@ const { initializeApp } = require("firebase-admin/app");
 const { getDatabase } = require("firebase-admin/database");
 const { onSchedule } = require("firebase-functions/v2/scheduler");
 const logger = require("firebase-functions/logger");
+const {
+  shouldRemoveRoom,
+  expiredJoinRequestKeys
+} = require("./cleanup-logic");
 
 initializeApp();
 
-const CLOSED_ROOM_RETENTION_MS = 10 * 60 * 1000;
-const ABANDONED_ROOM_RETENTION_MS = 24 * 60 * 60 * 1000;
-const JOIN_REQUEST_RETENTION_MS = 10 * 60 * 1000;
-
 /**
- * Deletes closed/abandoned rooms and expires unapproved join requests.
+ * Removes closed/abandoned rooms and expires unapproved join requests.
  * Realtime Database onDisconnect presence markers are the source of truth
  * for an unexpectedly disconnected host.
  */
@@ -33,35 +33,16 @@ exports.cleanupAbandonedRooms = onSchedule(
 
     snapshot.forEach((roomSnapshot) => {
       const room = roomSnapshot.val() || {};
-      const state = room.state || {};
-      const host = room.members && room.members[room.hostUid];
-      const closedAt = Number(state.closedAt || 0);
-      const lastActivityAt = Number(state.lastActivityAt || room.createdAt || 0);
-
-      const closedAndExpired =
-        state.status === "closed" &&
-        closedAt > 0 &&
-        now - closedAt >= CLOSED_ROOM_RETENTION_MS;
-
-      const hostGoneAndExpired =
-        host &&
-        host.online === false &&
-        lastActivityAt > 0 &&
-        now - lastActivityAt >= ABANDONED_ROOM_RETENTION_MS;
-
-      if (closedAndExpired || hostGoneAndExpired) {
+      if (shouldRemoveRoom(room, now)) {
         updates[roomSnapshot.key] = null;
         removedRooms += 1;
         return;
       }
 
-      const requests = roomSnapshot.child("joinRequests");
-      requests.forEach((requestSnapshot) => {
-        const createdAt = Number((requestSnapshot.val() || {}).createdAt || 0);
-        if (createdAt > 0 && now - createdAt >= JOIN_REQUEST_RETENTION_MS) {
-          updates[roomSnapshot.key + "/joinRequests/" + requestSnapshot.key] = null;
-          removedRequests += 1;
-        }
+      const requests = roomSnapshot.child("joinRequests").val() || {};
+      expiredJoinRequestKeys(requests, now).forEach((uid) => {
+        updates[roomSnapshot.key + "/joinRequests/" + uid] = null;
+        removedRequests += 1;
       });
     });
 
