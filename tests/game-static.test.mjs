@@ -43,6 +43,10 @@ test('reconnect, gap recovery and subscription disposal are implemented', () => 
   assert.ok(source.includes('function restoreRoomConnection()'));
   assert.ok(source.includes('function recoverRoomSnapshot()'));
   assert.ok(source.includes('function stopRoomListeners()'));
+  assert.ok(source.includes('function startPresenceHeartbeat()'));
+  assert.ok(source.includes("hostPresence.onDisconnect().update({connected:false,ready:false,lastSeenAt:firebase.database.ServerValue.TIMESTAMP})"));
+  assert.ok(!source.includes('roomRef.onDisconnect().remove()'));
+  assert.ok(!source.includes('ref.onDisconnect().remove()'));
 });
 
 test('critical network handlers are declared only once', () => {
