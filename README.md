@@ -52,13 +52,36 @@ npm test
 
 `test:rules` запускает локальный Firebase Realtime Database Emulator и проверяет запреты на чтение чужого игрового состояния, запись чужого хода, изменение чужого участника и конкурентное выделение одного места двум клиентам. `test:cleanup` проверяет политику срока жизни комнат и синтаксис Cloud Function.
 
-## Сборка APK
+## Сборка APK и установка обновлений
 
-GitHub Actions сначала выполняет статические и Firebase Rules Emulator-тесты. APK собирается только после успешного тестового job.
+GitHub Actions сначала выполняет статические и Firebase Rules Emulator-тесты. Для сборки распространяемого APK используется **release-подпись одним постоянным keystore**. Это обязательно для установки новой версии поверх старой: debug-сертификат GitHub runner меняется между изолированными CI-запусками.
 
-Параметры Android: minSdk 26 (Android 8), compileSdk 34, JDK 17, Android Gradle Plugin 8.5.2, Gradle 8.7. Артефакт сборки называется `munchausen-apk`; внутри ZIP находится `app-debug.apk`.
+### Одноразовая настройка подписи
 
-Текущая версия приложения: **1.2 (versionCode 3)**.
+Создайте ключ вне папки репозитория (например, в домашней директории Cloud Shell):
+
+```bash
+cd ~
+keytool -genkeypair -v -keystore munchausen-release.jks -keyalg RSA -keysize 2048 -validity 10000 -alias munchausen-release
+base64 -w 0 munchausen-release.jks
+```
+
+Сохраните пароль keystore и пароль ключа. Скопируйте выведенную base64-строку и добавьте в GitHub → **Settings → Secrets and variables → Actions** следующие Repository secrets:
+
+- `ANDROID_KEYSTORE_BASE64` — base64-строка файла keystore;
+- `ANDROID_KEYSTORE_PASSWORD` — пароль keystore;
+- `ANDROID_KEY_ALIAS` — `munchausen-release`;
+- `ANDROID_KEY_PASSWORD` — пароль ключа.
+
+**Не добавляйте `munchausen-release.jks` в Git или в артефакты.** Потеря ключа лишит возможности выпускать обновления поверх уже установленных APK.
+
+После настройки каждый запуск GitHub Actions на `main` собирает подписанный `app-release.apk` в артефакте `munchausen-apk`. `versionCode` автоматически увеличивается для каждого запуска CI.
+
+### Важный момент при переходе с прежних APK
+
+Старые APK собирались с временным debug-ключом. Android не разрешает обновлять приложение, если сертификат новой сборки отличается. Поэтому **один раз** потребуется удалить старую debug-сборку и установить первый APK, подписанный постоянным ключом. После этого все следующие версии будут устанавливаться поверх предыдущих без удаления приложения.
+
+Параметры Android: minSdk 26 (Android 8), compileSdk 34, JDK 17, Android Gradle Plugin 8.5.2, Gradle 8.7.
 
 ## Веб-версия
 
