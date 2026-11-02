@@ -382,6 +382,7 @@ function startHostRequestListener(){
    requestQueue=requestQueue.then(async()=>{
     try{
      if(!isHost||req.uid!==snap.val().uid||!Number.isInteger(Number(req.roll))||Number(req.roll)<1||Number(req.roll)>6)return;
+     if(Date.now()-Number(req.createdAt||0)>30000)return;
      const stateSnap=await roomRef.child('state').once('value'),state=stateSnap.val()||{};
      const active=activePlayerIndex(),expected=active==null?null:memberList[active]?.uid;
      if(state.status!=='started'||state.turnUid!==req.uid||expected!==req.uid||!awaiting())return;
