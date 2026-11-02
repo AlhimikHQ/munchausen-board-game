@@ -33,6 +33,9 @@ jobs:
       - name: Install pinned test dependencies
         run: npm install --no-audit --no-fund
 
+      - name: Install Cloud Functions dependencies
+        run: npm --prefix functions install --no-audit --no-fund
+
       - name: Run static game protocol tests and Firebase Rules Emulator tests
         run: npm test
 
