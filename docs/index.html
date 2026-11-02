@@ -462,17 +462,24 @@ async function createRoom(){
   let created=null,code='';
   for(let attempt=0;attempt<216&&!created;attempt++){
    code=makeRoomCode();const candidate=firebase.database().ref('rooms/'+code);
-   const tx=await withTimeout(candidate.transaction(current=>{
-    if(current&&!isReusableRoom(current,Date.now()))return;
-    return {
-     hostUid:fbUser.uid,createdAt:firebase.database.ServerValue.TIMESTAMP,maxPlayers:roomMaxPlayers,
-     settings:{playerCount:roomMaxPlayers,updatedAt:firebase.database.ServerValue.TIMESTAMP},
-     members:{[fbUser.uid]:{name:'Игрок 1',seat:0,ready:false,online:false,color:COL[0]||DEFAULT_COLORS[0],joinedAt:firebase.database.ServerValue.TIMESTAMP}},
-     state:{status:'lobby',seq:0,turnUid:null,lastActivityAt:firebase.database.ServerValue.TIMESTAMP}
-    };
-   },null,false),15000,'Сервер Firebase не ответил');
-   if(epoch!==netUiEpoch||$('#net').hidden)return;
-   if(tx.committed)created=candidate;
+   const roomData={
+    hostUid:fbUser.uid,createdAt:firebase.database.ServerValue.TIMESTAMP,maxPlayers:roomMaxPlayers,
+    settings:{playerCount:roomMaxPlayers,updatedAt:firebase.database.ServerValue.TIMESTAMP},
+    members:{[fbUser.uid]:{name:'Игрок 1',seat:0,ready:false,online:false,color:COL[0]||DEFAULT_COLORS[0],joinedAt:firebase.database.ServerValue.TIMESTAMP}},
+    state:{status:'lobby',seq:0,turnUid:null,lastActivityAt:firebase.database.ServerValue.TIMESTAMP}
+   };
+   try{
+    await candidate.set(roomData);
+    created=candidate;
+   }catch(e){
+    const errorText=String((e&&e.code)||'')+' '+String((e&&e.message)||e||'');
+    if(/permission[_-]denied/i.test(errorText))continue;
+    throw e;
+   }
+   if(epoch!==netUiEpoch||$('#net').hidden){
+    await candidate.child('state').update({status:'closed',closedAt:firebase.database.ServerValue.TIMESTAMP});
+    return;
+   }
   }
   if(!created)throw new Error('Свободный код комнаты не найден. Попробуйте ещё раз.');
   roomCode=code;roomRef=created;isHost=true;netMode=true;roomSeq=0;lastEvent=0;myIndex=0;persistRoomSession();
