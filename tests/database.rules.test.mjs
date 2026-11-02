@@ -162,7 +162,11 @@ test('a new authenticated player can claim a free seat and publish membership, p
 test('the host can atomically publish the authoritative game state and event log', async () => {
   const db = env.authenticatedContext('host-1').database();
   const now = 1700000000100;
+  const initial = await assertSucceeds(get(ref(db, roomPath)));
+  assert.equal(initial.val().meta.hostUid, 'host-1');
+  let transactionHostUid = null;
   const result = await assertSucceeds(runTransaction(ref(db, roomPath), current => {
+    transactionHostUid = current && current.meta && current.meta.hostUid;
     if (!current || current.meta.hostUid !== 'host-1') return;
     current.state = {
       status: 'started', seq: 1, activeUid: 'player-1', turnToken: 'turn-1',
@@ -174,6 +178,7 @@ test('the host can atomically publish the authoritative game state and event log
     current.meta.updatedAt = now;
     return current;
   }));
+  assert.equal(transactionHostUid, 'host-1', 'the host transaction must read the seeded room');
   assert.equal(result.committed, true);
   const state = await assertSucceeds(get(ref(db, roomPath + '/state')));
   assert.equal(state.val().seq, 1);
