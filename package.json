@@ -4,7 +4,7 @@
   "version": "1.2.0",
   "type": "module",
   "engines": {
-    "node": ">=20"
+    "node": ">=24.12.0"
   },
   "scripts": {
     "test": "npm run test:static && npm run test:rules",
