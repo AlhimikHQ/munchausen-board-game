@@ -194,7 +194,7 @@ const firebaseConfig=window.MUNCHAUSEN_FIREBASE_CONFIG||{
 const ROOM_REUSE_MS=60*1000,ROOM_ABANDON_MS=24*60*60*1000;
 const DEFAULT_COLORS=['#e02020','#1e5bff','#1faa3c','#ffe94d','#fff'];
 let netMode=false,fbUser=null,roomRef=null,roomCode='',isHost=false,myIndex=-1,memberList=[];
-let lastEvent=0,roomSeq=0,roomMaxPlayers=3,roomStarting=false;
+let lastEvent=0,roomSeq=0,roomMaxPlayers=3,roomStarting=false,publishingSeq=0,hostUidCurrent='';
 let requestQueue=Promise.resolve(),authError='',authPromise=null;
 let connectionRef=null,connectionHandler=null,roomStatusRef=null,requestListener=null;
 let roomJoinPending=false,roomCreatePending=false,netUiEpoch=0;
@@ -366,14 +366,14 @@ function watchMembers(){
   updateLobbyControls();
  },e=>roomStatus('Ошибка чтения настроек комнаты: '+netErr(e)));
  roomRef.child('hostUid').on('value',snap=>{
-  const nextHost=snap.val();isHost=nextHost===fbUser?.uid;
+  const nextHost=snap.val();hostUidCurrent=nextHost||'';isHost=nextHost===fbUser?.uid;
   if(isHost)startHostRequestListener();else stopHostRequestListener();
   updateJoinRequestPanel();
  },e=>roomStatus('Ошибка определения ведущего: '+netErr(e)));
 }
 async function maybeElectHost(){
  if(!netMode||!roomRef||!fbUser||isHost||!memberList.length)return;
- const current=memberList.find(m=>m.uid===roomRef.hostUid);
+ const current=memberList.find(m=>m.uid===hostUidCurrent);
  if(current&&current.online!==false)return;
  try{
   const tx=await roomRef.child('hostUid').transaction(old=>{
@@ -480,6 +480,7 @@ async function joinRoom(){
 function syncFromAuthoritativeState(st){
  if(!st||!started||!st.snapshot)return;
  const seq=Number(st.seq)||0;
+ if(isHost&&seq===publishingSeq){lastEvent=seq;roomSeq=seq;return;}
  if(seq<=lastEvent)return;
  if(seq===lastEvent+1&&st.lastEvent&&Number(st.lastEvent.seq)===seq){
   requestQueue=requestQueue.then(async()=>{
@@ -503,6 +504,7 @@ function queueAuthoritativeState(st){
  if(!st)return;
  if(st.status==='closed'){
   roomStatus('Комната закрыта создателем.');
+  if(netMode)leaveNetworkSetup();
   return;
  }
  if(st.status==='started'&&!started){
@@ -630,16 +632,18 @@ async function publishRoll(roll,actorUid=fbUser.uid,launchState=V.netLaunchState
   createdAt:firebase.database.ServerValue.TIMESTAMP
  };
  const nextUid=currentTurnUid();
+ publishingSeq=seq;lastEvent=seq;roomSeq=seq;
  const tx=await withTimeout(stateRef.transaction(state=>{
   if(!state||state.status!=='started'||Number(state.seq||0)!==baseSeq||state.turnUid!==actorUid)return;
   return {...state,seq,snapshot,lastEvent:event,turnUid:nextUid,lastActivityAt:firebase.database.ServerValue.TIMESTAMP};
  },null,false),15000,'Не удалось сохранить ход на сервере');
  if(!tx.committed){
+  publishingSeq=0;
   const latest=await stateRef.once('value'),st=latest.val();
   if(st&&st.snapshot){applyNetSnapshot(st.snapshot);roomSeq=Number(st.seq)||0;lastEvent=roomSeq;}
   throw new Error('Ход уже изменён другим подключением. Состояние восстановлено.');
  }
- roomSeq=seq;lastEvent=seq;
+ publishingSeq=0;
  roomRef.child('events/'+seq).set(event).catch(e=>console.warn('event archive write',e));
 }
 function netRoll(roll,launchState=V.netLaunchState,diceState=Array.from(S)){
