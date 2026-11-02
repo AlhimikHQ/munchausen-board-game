@@ -29,12 +29,13 @@
               ".write": "auth != null && root.child('rooms').child($roomCode).child('members').child($uid).exists() && (auth.uid === $uid || root.child('rooms').child($roomCode).child('hostUid').val() === auth.uid)",
               ".validate": "newData.isNumber()"
             }
-          }
+          },
+          ".write": "auth != null && root.child('rooms').child($roomCode).child('hostUid').val() === auth.uid"
         },
         "joinRequests": {
           "$uid": {
             ".read": "auth != null && (auth.uid === $uid || root.child('rooms').child($roomCode).child('hostUid').val() === auth.uid)",
-            ".write": "auth != null && (root.child('rooms').child($roomCode).child('hostUid').val() === auth.uid || (auth.uid === $uid && root.child('rooms').child($roomCode).child('state').child('status').val() === 'lobby' && !root.child('rooms').child($roomCode).child('members').child(auth.uid).exists() && root.child('rooms').child($roomCode).child('members').numChildren() < root.child('rooms').child($roomCode).child('maxPlayers').val() && newData.child('name').isString() && newData.child('name').val().length <= 32 && newData.child('createdAt').isNumber()))",
+            ".write": "auth != null && ((root.child('rooms').child($roomCode).child('hostUid').val() === auth.uid) || (auth.uid === $uid && data.exists() && !newData.exists() && (data.child('status').val() === 'rejected' || (data.child('createdAt').isNumber() && now - data.child('createdAt').val() >= 90000))) || (auth.uid === $uid && root.child('rooms').child($roomCode).child('state').child('status').val() === 'lobby' && !root.child('rooms').child($roomCode).child('members').child(auth.uid).exists() && root.child('rooms').child($roomCode).child('members').numChildren() < root.child('rooms').child($roomCode).child('maxPlayers').val() && newData.child('name').isString() && newData.child('name').val().length <= 32 && newData.child('createdAt').isNumber()))",
             ".validate": "newData.hasChildren(['name', 'createdAt']) || newData.child('status').val() === 'rejected'"
           }
         },
@@ -51,7 +52,7 @@
         "requests": {
           ".read": "auth != null && root.child('rooms').child($roomCode).child('hostUid').val() === auth.uid",
           "$requestId": {
-            ".write": "auth != null && ((root.child('rooms').child($roomCode).child('hostUid').val() === auth.uid && data.exists() && !newData.exists()) || (newData.child('uid').val() === auth.uid && root.child('rooms').child($roomCode).child('state').child('status').val() === 'started' && root.child('rooms').child($roomCode).child('state').child('turnUid').val() === auth.uid && newData.child('roll').isNumber() && newData.child('roll').val() >= 1 && newData.child('roll').val() <= 6))",
+            ".write": "auth != null && ((root.child('rooms').child($roomCode).child('hostUid').val() === auth.uid && data.exists() && !newData.exists()) || (auth.uid === newData.child('uid').val() && root.child('rooms').child($roomCode).child('members').child(auth.uid).exists() && root.child('rooms').child($roomCode).child('state').child('status').val() === 'started' && root.child('rooms').child($roomCode).child('state').child('turnUid').val() === auth.uid && newData.child('roll').isNumber() && newData.child('roll').val() >= 1 && newData.child('roll').val() <= 6))",
             ".validate": "newData.hasChildren(['uid', 'roll', 'createdAt', 'launchState', 'diceState']) && newData.child('uid').isString() && newData.child('roll').isNumber() && newData.child('createdAt').isNumber() && newData.child('launchState').numChildren() === 24 && newData.child('diceState').numChildren() === 24",
             "launchState": {
               "$index": {
