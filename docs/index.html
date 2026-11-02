@@ -481,7 +481,7 @@ async function processRollRequest(request,requestId){
  if(!isHost||!roomRef||!requestId)return;
  if(!validRollRequest(request,requestId)){try{await roomRef.child('requests/'+requestId).remove();}catch(ignore){}return;}
  const actor=memberList.find(m=>m.uid===request.uid);if(!actor||actor.connected===false){try{await roomRef.child('requests/'+requestId).remove();}catch(ignore){}return;}
- let claimed=false,beforeSnapshot=null,beforeDice=null;
+ let claimed=false,preservePending=false,beforeSnapshot=null,beforeDice=null;
  try{
   const claim=await roomRef.transaction(room=>{
    if(!room||!room.meta||room.meta.status!=='started'||!room.state)return;
@@ -490,7 +490,12 @@ async function processRollRequest(request,requestId){
    if(state.processing||state.turnToken!==request.turnToken||state.activeUid!==request.uid)return;
    state.processing={requestId,uid:request.uid,turnToken:request.turnToken,claimedAt:Date.now()};return room;
   },null,false);
-  claimed=claim.committed;if(!claimed)return;
+  claimed=claim.committed;
+  if(!claimed){
+   const state=claim.snapshot&&claim.snapshot.child('state').val();
+   preservePending=!!(state&&state.processing&&state.processing.turnToken===request.turnToken&&state.turnToken===request.turnToken);
+   return;
+  }
   roomProcessing=true;beforeSnapshot=makeNetSnapshot();beforeDice=Array.from(S);
   if(request.uid!==fbUser.uid)await replayNetDice({by:request.uid,roll:request.roll,launchState:request.launchState,diceState:request.diceState});
   else{S.set(request.diceState);draw();}
@@ -512,7 +517,7 @@ async function processRollRequest(request,requestId){
   if(beforeSnapshot&&started){applyNetSnapshot(beforeSnapshot);if(beforeDice)S.set(beforeDice);}
   if(claimed){try{await releaseProcessingLock(requestId);}catch(ignore){}}
   roomProcessing=false;console.error('Firebase turn transaction:',netErr(e),e);
- }finally{if(roomRef){try{await roomRef.child('requests/'+requestId).remove();}catch(e){console.warn('Firebase request cleanup:',netErr(e));}}}
+ }finally{if(roomRef&&!preservePending){try{await roomRef.child('requests/'+requestId).remove();}catch(e){console.warn('Firebase request cleanup:',netErr(e));}}}
 }
 function netRoll(roll,launchState=V.netLaunchState,diceState=Array.from(S)){
  if(!netMode||!started||roomProcessing||!awaitingOrDraw()||!roomRef||!fbUser||roomExpectedUid!==fbUser.uid)return;
