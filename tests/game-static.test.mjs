@@ -19,6 +19,15 @@ test('all Firebase compat scripts use the same pinned SDK release', () => {
   }
 });
 
+test('Firebase failures are visible in the game instead of only the WebView console', () => {
+  assert.ok(source.includes('function showRoomToast(message'));
+  assert.ok(source.includes('function reportFirebase(context,error)'));
+  assert.ok(source.includes("target.on(event,callback,onError)"));
+  assert.ok(source.includes("reportFirebase('Не удалось отправить ход в Firebase',e)"));
+  assert.ok(source.includes("firebase.database().goOnline()"));
+});
+
+
 test('room codes contain exactly three dice', () => {
   assert.ok(source.includes("function makeRoomCode(){return Array.from({length:3},randomDie).join('');}"));
   assert.ok(source.includes("function roomCodeValid(code){return typeof code==='string'&&/^[1-6]{3}$/.test(code);}"));
