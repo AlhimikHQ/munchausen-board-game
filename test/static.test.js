@@ -74,7 +74,7 @@ test("CI runs Firebase emulator tests and Android lint/build", () => {
 });
 
 test("cleanup retains active rooms and removes expired closed or abandoned rooms", () => {
-  const now = 5_000_000;
+  const now = 1_800_000_000_000;
   assert.equal(shouldRemoveRoom({ state: { status: "lobby", lastActivityAt: now } }, now), false);
   assert.equal(shouldRemoveRoom({ state: { status: "closed", closedAt: now } }, now + CLOSED_ROOM_RETENTION_MS - 1), false);
   assert.equal(shouldRemoveRoom({ state: { status: "closed", closedAt: now } }, now + CLOSED_ROOM_RETENTION_MS), true);
