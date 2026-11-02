@@ -40,7 +40,8 @@ jobs:
         run: npm test
 
   build:
-    name: Assemble Android APK
+    name: Assemble signed Android APK
+    if: github.event_name != 'pull_request'
     needs: test
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -59,14 +60,35 @@ jobs:
         with:
           gradle-version: '8.7'
 
-      - name: Build debug APK
-        working-directory: android
-        run: gradle --no-daemon --stacktrace assembleDebug
+      - name: Prepare persistent Android signing key
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          set -euo pipefail
+          if [ -z "${ANDROID_KEYSTORE_BASE64}" ]; then
+            echo "::error::Configure ANDROID_KEYSTORE_BASE64 and the three Android signing secrets in repository Settings > Secrets and variables > Actions."
+            exit 1
+          fi
+          printf '%s' "${ANDROID_KEYSTORE_BASE64}" | base64 --decode > "${GITHUB_WORKSPACE}/android/munchausen-release.keystore"
+          chmod 600 "${GITHUB_WORKSPACE}/android/munchausen-release.keystore"
 
-      - name: Upload APK
+      - name: Build signed release APK
+        working-directory: android
+        env:
+          ANDROID_KEYSTORE_PATH: ${{ github.workspace }}/android/munchausen-release.keystore
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: gradle --no-daemon --stacktrace assembleRelease
+
+      - name: Remove signing key from workspace
+        if: always()
+        run: rm -f android/munchausen-release.keystore
+
+      - name: Upload signed APK
         uses: actions/upload-artifact@v4
         with:
           name: munchausen-apk
-          path: android/app/build/outputs/apk/debug/app-debug.apk
+          path: android/app/build/outputs/apk/release/app-release.apk
           if-no-files-found: error
           retention-days: 14
