@@ -13,10 +13,15 @@ test('the complete game script parses as JavaScript', () => {
   assert.doesNotThrow(() => new vm.Script(source, { filename: 'docs/index.html' }));
 });
 
-test('all Firebase compat scripts use the same pinned SDK release', () => {
+test('Firebase SDK is pinned and loaded only for multiplayer', () => {
+  assert.ok(source.includes("const base='https://www.gstatic.com/firebasejs/13.1.0/';"));
   for (const asset of ['firebase-app-compat.js', 'firebase-auth-compat.js', 'firebase-database-compat.js']) {
-    assert.ok(html.includes('firebasejs/13.1.0/' + asset), asset + ' must be version pinned');
+    assert.ok(source.includes("'" + asset + "'"), asset + ' must be version pinned');
+    assert.ok(!html.includes('<script src="https://www.gstatic.com/firebasejs/13.1.0/' + asset), asset + ' must not load at startup');
   }
+  assert.ok(source.includes('function loadFirebaseSdk()'));
+  assert.ok(source.includes('await loadFirebaseSdk()'));
+  assert.ok(!source.includes('const authReady=ensureAuth()'));
 });
 
 test('Firebase failures are visible in the game instead of only the WebView console', () => {
@@ -27,15 +32,19 @@ test('Firebase failures are visible in the game instead of only the WebView cons
   assert.ok(source.includes("firebase.database().goOnline()"));
 });
 
-test('Android release APKs keep a stable signer and receive increasing version codes', () => {
+test('optimized Android APK updates use one fixed public signing key without secrets', () => {
   const gradle = fs.readFileSync(new URL('../android/app/build.gradle', import.meta.url), 'utf8');
   const workflow = fs.readFileSync(new URL('../.github/workflows/android.yml', import.meta.url), 'utf8');
-  assert.ok(gradle.includes('versionCode generatedVersionCode'));
-  assert.ok(gradle.includes('1000 + githubRunNumber'));
-  assert.ok(gradle.includes('signingConfig signingConfigs.release'));
-  assert.ok(workflow.includes('ANDROID_KEYSTORE_BASE64'));
+  const key = fs.readFileSync(new URL('../android/munchausen-debug.keystore.base64', import.meta.url), 'utf8').trim();
+  assert.ok(gradle.includes('versionCode 1000 + githubRunNumber'));
+  assert.ok(gradle.includes('storeFile rootProject.file(\'munchausen-debug.keystore\')'));
+  assert.ok(gradle.includes('minifyEnabled true'));
+  assert.ok(gradle.includes('shrinkResources true'));
+  assert.ok(key.startsWith('MII') && key.length > 3000);
+  assert.ok(workflow.includes('base64 --decode android/munchausen-debug.keystore.base64'));
   assert.ok(workflow.includes('assembleRelease'));
   assert.ok(workflow.includes('app-release.apk'));
+  assert.ok(!workflow.includes('secrets.'));
 });
 
 
@@ -44,19 +53,22 @@ test('room codes contain exactly three dice', () => {
   assert.ok(source.includes("function roomCodeValid(code){return typeof code==='string'&&/^[1-6]{3}$/.test(code);}"));
 });
 
-test('host room transactions retry when the local Firebase cache initially returns null', () => {
-  assert.ok(source.includes('function roomTransaction(updateFn)'));
-  assert.ok(source.includes('current=>current===null?null:updateFn(current)'));
-  assert.equal((source.match(/roomTransaction\(/g) || []).length, 6);
+test('multiplayer transactions touch only the small state node', () => {
+  assert.ok(source.includes("roomRef.child('state').transaction"));
+  assert.ok(source.includes("roomRef.child('state').transaction(state=>"));
+  assert.ok(source.includes('await roomRef.update(updates)'));
   assert.ok(!source.includes('roomRef.transaction('));
+  assert.ok(!source.includes('roomTransaction('));
 });
 
 test('the turn pipeline locks a turn and commits event, snapshot and sequence atomically', () => {
   assert.ok(source.includes('function processRollRequest(request,requestId)'));
   assert.ok(source.includes('state.turnToken!==request.turnToken'));
   assert.ok(source.includes('state.processing={requestId,uid:request.uid,turnToken:request.turnToken,claimedAt:Date.now()}'));
-  assert.ok(source.includes("room.events[String(seq).padStart(12,'0')]=event"));
-  assert.ok(source.includes("room.state={status:'started',seq,players:"));
+  assert.ok(source.includes("['events/'+String(seq).padStart(12,'0')]:event"));
+  assert.ok(source.includes("const nextState={status:'started',seq,players:"));
+  assert.ok(source.includes("updates['events/'+String(seq-ROOM_EVENT_LIMIT).padStart(12,'0')]=null"));
+  assert.ok(source.includes("await roomRef.update(updates)"));
 });
 
 test('untrusted dice requests are checked against the deterministic physics simulation', () => {
