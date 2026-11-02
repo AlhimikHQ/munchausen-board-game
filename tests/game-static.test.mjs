@@ -34,7 +34,8 @@ test('the turn pipeline locks a turn and commits event, snapshot and sequence at
 
 test('untrusted dice requests are checked against the deterministic physics simulation', () => {
   assert.ok(source.includes('function validRollRequest(request,requestId)'));
-  assert.ok(source.includes('simulateDiceResult(request.launchState)===roll'));
+  assert.ok(source.includes('const simulated=simulateDiceState(request.launchState);'));
+  assert.ok(source.includes('Math.abs(value-simulated.state[index])<=1e-5'));
   assert.ok(source.includes('roll>=1&&roll<=6'));
 });
 
@@ -42,6 +43,8 @@ test('reconnect, gap recovery and subscription disposal are implemented', () => 
   assert.ok(source.includes("firebase.database().ref('.info/connected')"));
   assert.ok(source.includes('function restoreRoomConnection()'));
   assert.ok(source.includes('function recoverRoomSnapshot()'));
+  assert.ok(source.includes('function recoverStaleProcessingLock()'));
+  assert.ok(source.includes('function scheduleSnapshotRecovery()'));
   assert.ok(source.includes('function stopRoomListeners()'));
   assert.ok(source.includes('function startPresenceHeartbeat()'));
   assert.ok(source.includes("hostPresence.onDisconnect().update({connected:false,ready:false,lastSeenAt:firebase.database.ServerValue.TIMESTAMP})"));
