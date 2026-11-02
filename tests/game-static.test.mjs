@@ -15,7 +15,7 @@ test('the complete game script parses as JavaScript', () => {
 
 test('all Firebase compat scripts use the same pinned SDK release', () => {
   for (const asset of ['firebase-app-compat.js', 'firebase-auth-compat.js', 'firebase-database-compat.js']) {
-    assert.ok(html.includes('firebasejs/12.19.0/' + asset), asset + ' must be version pinned');
+    assert.ok(html.includes('firebasejs/13.1.0/' + asset), asset + ' must be version pinned');
   }
 });
 
@@ -35,7 +35,7 @@ test('the turn pipeline locks a turn and commits event, snapshot and sequence at
 test('untrusted dice requests are checked against the deterministic physics simulation', () => {
   assert.ok(source.includes('function validRollRequest(request,requestId)'));
   assert.ok(source.includes('simulateDiceResult(request.launchState)===roll'));
-  assert.ok(source.includes('roll<1||roll>6'));
+  assert.ok(source.includes('roll>=1&&roll<=6'));
 });
 
 test('reconnect, gap recovery and subscription disposal are implemented', () => {
