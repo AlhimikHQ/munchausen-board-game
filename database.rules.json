@@ -24,6 +24,10 @@
             "color": {
               ".write": "auth != null && root.child('rooms').child($roomCode).child('members').child($uid).exists() && (auth.uid === $uid || root.child('rooms').child($roomCode).child('hostUid').val() === auth.uid)",
               ".validate": "newData.isString() && newData.val().length === 7"
+            },
+            "offlineAt": {
+              ".write": "auth != null && root.child('rooms').child($roomCode).child('members').child($uid).exists() && (auth.uid === $uid || root.child('rooms').child($roomCode).child('hostUid').val() === auth.uid)",
+              ".validate": "newData.isNumber()"
             }
           }
         },
@@ -48,7 +52,17 @@
           ".read": "auth != null && root.child('rooms').child($roomCode).child('hostUid').val() === auth.uid",
           "$requestId": {
             ".write": "auth != null && newData.child('uid').val() === auth.uid && root.child('rooms').child($roomCode).child('state').child('status').val() === 'started' && root.child('rooms').child($roomCode).child('state').child('turnUid').val() === auth.uid && newData.child('roll').isNumber() && newData.child('roll').val() >= 1 && newData.child('roll').val() <= 6",
-            ".validate": "newData.hasChildren(['uid', 'roll', 'createdAt', 'launchState', 'diceState']) && newData.child('uid').isString() && newData.child('roll').isNumber() && newData.child('createdAt').isNumber() && newData.child('launchState').numChildren() === 24 && newData.child('diceState').numChildren() === 24"
+            ".validate": "newData.hasChildren(['uid', 'roll', 'createdAt', 'launchState', 'diceState']) && newData.child('uid').isString() && newData.child('roll').isNumber() && newData.child('createdAt').isNumber() && newData.child('launchState').numChildren() === 24 && newData.child('diceState').numChildren() === 24",
+            "launchState": {
+              "$index": {
+                ".validate": "newData.isNumber() && newData.val() > -1000 && newData.val() < 1000"
+              }
+            },
+            "diceState": {
+              "$index": {
+                ".validate": "newData.isNumber() && newData.val() > -1000 && newData.val() < 1000"
+              }
+            }
           }
         },
         "events": {
