@@ -287,6 +287,14 @@ function watchMembers(){
   const settings=snap.val()||{},colors=Array.isArray(settings.colors)?settings.colors:Object.keys(settings.colors||{}).sort((a,b)=>Number(a)-Number(b)).map(k=>settings.colors[k]);updateRoomPlayerColors(colors);
  });
 }
+// Firebase transactions may first call the updater with null because the room root is not in the local cache.
+ // Returning null (rather than undefined) forces a server hash check; if the room exists, Firebase retries
+ // the updater with the authoritative server value. A genuinely missing room is still blocked by Rules.
+function roomTransaction(updateFn){
+ const target=roomRef;
+ if(!target)throw new Error('Room is not connected');
+ return target.transaction(current=>current===null?null:updateFn(current),null,false);
+}
 function roomRootData(){
  const now=Date.now();
  return{meta:{schema:FIREBASE_SCHEMA,hostUid:fbUser.uid,status:'lobby',maxPlayers:roomMaxPlayers,createdAt:now,updatedAt:now},
@@ -384,7 +392,7 @@ async function maybeStartNetworkGame(){
  if(!isHost||started||roomStarting||roomStartPending||!roomRef||!roomMeta||roomMeta.status!=='lobby')return;
  roomStartPending=true;
  try{
-  const tx=await roomRef.transaction(room=>{
+  const tx=await roomTransaction(room=>{
    if(!room||!room.meta||room.meta.status!=='lobby')return;
    const members=Object.entries(room.members||{}).map(([uid,value])=>({uid,...value})).sort((a,b)=>Number(a.seat||0)-Number(b.seat||0));
    const count=Number(room.meta.maxPlayers)||0;
@@ -489,7 +497,7 @@ function drainNetEvents(){
 }
 async function recoverStaleProcessingLock(){
  if(!roomRef||!isHost||!netMode)return false;
- const tx=await roomRef.transaction(room=>{
+ const tx=await roomTransaction(room=>{
   const processing=room&&room.state&&room.state.processing;
   if(!processing||Date.now()-Number(processing.claimedAt||0)<30000)return;
   room.state.processing=null;room.meta.updatedAt=Date.now();return room;
@@ -515,7 +523,7 @@ function scheduleStaleLockRecovery(){
 }
 async function releaseProcessingLock(requestId){
  if(!roomRef||!isHost)return;
- await roomRef.transaction(room=>{if(!room||!room.state||!room.state.processing||room.state.processing.requestId!==requestId)return;room.state.processing=null;return room;},null,false);
+ await roomTransaction(room=>{if(!room||!room.state||!room.state.processing||room.state.processing.requestId!==requestId)return;room.state.processing=null;return room;},null,false);
 }
 async function processRollRequest(request,requestId){
  if(!isHost||!roomRef||!requestId)return;
@@ -523,7 +531,7 @@ async function processRollRequest(request,requestId){
  const actor=memberList.find(m=>m.uid===request.uid);if(!actor||actor.connected===false){try{await roomRef.child('requests/'+requestId).remove();}catch(ignore){}return;}
  let claimed=false,preservePending=false,beforeSnapshot=null,beforeDice=null;
  try{
-  const claim=await roomRef.transaction(room=>{
+  const claim=await roomTransaction(room=>{
    if(!room||!room.meta||room.meta.status!=='started'||!room.state)return;
    const state=room.state;
    if(state.processing&&Date.now()-Number(state.processing.claimedAt||0)>=30000)state.processing=null;
@@ -540,7 +548,7 @@ async function processRollRequest(request,requestId){
   if(request.uid!==fbUser.uid)await replayNetDice({by:request.uid,roll:request.roll,launchState:request.launchState,diceState:request.diceState});
   else{S.set(request.diceState);draw();}
   await play(Number(request.roll));
-  const commit=await roomRef.transaction(room=>{
+  const commit=await roomTransaction(room=>{
    if(!room||!room.state||!room.state.processing||room.state.processing.requestId!==requestId||room.state.processing.turnToken!==request.turnToken)return;
    const seq=(Number(room.state.seq)||0)+1,snapshot=makeNetSnapshot();snapshot.seq=seq;
    const nextIndex=activePlayerIndex(snapshot),activeUid=networkPlayers[nextIndex]&&networkPlayers[nextIndex].uid||'',turnToken=makeTurnToken(seq,activeUid);
