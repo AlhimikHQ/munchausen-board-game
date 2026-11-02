@@ -577,6 +577,7 @@ function queueAuthoritativeState(st){
   return;
  }
  if(st.status==='started'&&!started){
+  if(isHost&&roomStarting)return;
   startNetworkGame(st.players||[],st.snapshot||null,Number(st.seq)||0,false).catch(e=>roomStatus('Не удалось восстановить игру: '+netErr(e)));
   return;
  }
@@ -601,29 +602,41 @@ function initNetworkBoard(players){
  }
  relayout();mode='draw';dl=[...Array(np).keys()];di=0;dr={};TO=[...dl];DRES={};ORD.length=0;LB=[];cur=0;roomStarting=true;fit();
 }
+function makeInitialNetSnapshot(players){
+ const count=players.length;
+ return{
+  version:3,seq:0,playerCount:count,colors:players.map((p,i)=>p.color||DEFAULT_COLORS[i]),
+  mode:'draw',dl:[...Array(count).keys()],di:0,dr:{},cur:0,
+  TO:[...Array(count).keys()],DRES:{},ORD:[],LB:[],over:false,
+  players:players.map((p,i)=>({pos:1,seat:i,skip:0,done:0,pend:0,st:{n:0,v:[0,0,0,0,0,0],up:0,dn:0,sk:0}})),
+  diceState:Array.from(S)
+ };
+}
 async function startNetworkGame(players,snapshot,seq=0,hostStart=true){
  if(started)return;
  if(!Array.isArray(players)||players.length<2||players.length>5)throw new Error('Некорректный состав комнаты.');
  roomStarting=true;roomSeq=Number(seq)||0;lastEvent=roomSeq;
+ if(hostStart&&isHost&&roomRef){
+  const initialSnapshot=snapshot||makeInitialNetSnapshot(players);
+  const initialState={
+   status:'started',players,seq:0,turnUid:players[0]?.uid||null,
+   snapshot:initialSnapshot,lastEvent:null,lastActivityAt:firebase.database.ServerValue.TIMESTAMP
+  };
+  const tx=await roomRef.child('state').transaction(current=>{
+   if(!current||current.status!=='lobby'||Number(current.seq)!==0)return;
+   return initialState;
+  },null,false);
+  if(tx.committed){snapshot=initialSnapshot;seq=0;}
+  else{
+   const latest=await roomRef.child('state').once('value'),state=latest.val();
+   if(!state||state.status!=='started'||!state.snapshot)throw new Error('Комната уже изменила состояние до запуска.');
+   players=state.players||players;snapshot=state.snapshot;seq=Number(state.seq)||0;
+  }
+ }
  initNetworkBoard(players);
  if(snapshot)applyNetSnapshot(snapshot);
  initMotion();banner('● 🎲 ?',0);
- if(!hostStart||!isHost||!roomRef)return;
- const initialSnapshot=makeNetSnapshot();
- const initialState={
-  status:'started',players,seq:0,turnUid:players[0]?.uid||null,
-  snapshot:initialSnapshot,lastEvent:null,lastActivityAt:firebase.database.ServerValue.TIMESTAMP
- };
- const tx=await withTimeout(roomRef.child('state').transaction(current=>{
-  if(!current||current.status!=='lobby'||current.seq!==0)return;
-  return initialState;
- },null,false),15000,'Не удалось зафиксировать запуск комнаты');
- if(!tx.committed){
-  const latest=await roomRef.child('state').once('value'),st=latest.val();
-  if(st&&st.status==='started'&&st.snapshot)applyNetSnapshot(st.snapshot);
-  else throw new Error('Комната уже изменила состояние до запуска.');
- }
- roomSeq=Number((tx.snapshot.val()||initialState).seq)||0;lastEvent=roomSeq;roomStarting=false;
+ roomSeq=Number(seq)||0;lastEvent=roomSeq;roomStarting=false;
 }
 function makeNetSnapshot(){
  return{
@@ -679,13 +692,14 @@ async function runNetEvent(ev){
 async function publishRoll(roll,actorUid=fbUser.uid,launchState=V.netLaunchState,diceState=Array.from(S)){
  if(!isHost||!roomRef||!validNetRoll(roll,launchState,diceState))return;
  const stateRef=roomRef.child('state');
- const current=await stateRef.once('value'),base=current.val()||{};
- const expected=activePlayerIndex()==null?null:memberList[activePlayerIndex()]?.uid;
+ const current=await withTimeout(stateRef.once('value'),15000,'Не удалось прочитать состояние хода');
+ const base=current.val()||{};
+ const active=activePlayerIndex(),expected=active==null?null:memberList[active]?.uid;
  if(base.status!=='started'||base.turnUid!==actorUid||expected!==actorUid||!awaitingOrDraw())return;
  if(actorUid!==fbUser.uid)await replayNetDice({by:actorUid,roll,launchState,diceState});
  else if(Array.isArray(diceState)){S.set(diceState);draw();}
- await play(Number(roll));
  const baseSeq=Number(base.seq)||0,seq=baseSeq+1;
+ await play(Number(roll));
  const snapshot=makeNetSnapshot();snapshot.seq=seq;
  const event={seq,type:'roll',roll:Number(roll),by:actorUid,
   launchState:Array.isArray(launchState)?launchState:Array.from(S),
@@ -693,19 +707,26 @@ async function publishRoll(roll,actorUid=fbUser.uid,launchState=V.netLaunchState
   createdAt:firebase.database.ServerValue.TIMESTAMP
  };
  const nextUid=currentTurnUid();
- publishingSeq=seq;lastEvent=seq;roomSeq=seq;
- const tx=await withTimeout(stateRef.transaction(state=>{
-  if(!state||state.status!=='started'||Number(state.seq||0)!==baseSeq||state.turnUid!==actorUid)return;
-  return {...state,seq,snapshot,lastEvent:event,turnUid:nextUid,lastActivityAt:firebase.database.ServerValue.TIMESTAMP};
- },null,false),15000,'Не удалось сохранить ход на сервере');
- if(!tx.committed){
-  publishingSeq=0;
-  const latest=await stateRef.once('value'),st=latest.val();
-  if(st&&st.snapshot){applyNetSnapshot(st.snapshot);roomSeq=Number(st.seq)||0;lastEvent=roomSeq;}
-  throw new Error('Ход уже изменён другим подключением. Состояние восстановлено.');
- }
- publishingSeq=0;
- roomRef.child('events/'+seq).set(event).catch(e=>console.warn('event archive write',e));
+ publishingSeq=seq;
+ try{
+  const tx=await stateRef.transaction(state=>{
+   if(!state||state.status!=='started'||Number(state.seq||0)!==baseSeq||state.turnUid!==actorUid)return;
+   return {...state,seq,snapshot,lastEvent:event,turnUid:nextUid,lastActivityAt:firebase.database.ServerValue.TIMESTAMP};
+  },null,false);
+  if(!tx.committed)throw new Error('Ход уже изменён другим подключением.');
+  roomSeq=seq;lastEvent=seq;
+  roomRef.child('events/'+seq).set(event).catch(e=>console.warn('event archive write',e));
+ }catch(e){
+  try{
+   const latest=await stateRef.once('value'),st=latest.val();
+   if(st&&st.snapshot){applyNetSnapshot(st.snapshot);roomSeq=Number(st.seq)||0;lastEvent=roomSeq;}
+   else if(base.snapshot)applyNetSnapshot(base.snapshot);
+  }catch(syncError){
+   if(base.snapshot)applyNetSnapshot(base.snapshot);
+   console.warn('Unable to load authoritative state after rejected turn',syncError);
+  }
+  throw e;
+ }finally{publishingSeq=0;}
 }
 function netRoll(roll,launchState=V.netLaunchState,diceState=Array.from(S)){
  if(!netMode){play(roll);return;}
