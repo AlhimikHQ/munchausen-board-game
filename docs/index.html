@@ -650,14 +650,22 @@ function replayNetDice(ev){
   requestAnimationFrame(dieLoop);setTimeout(complete,8000);
  });
 }
+function validNetRoll(roll,launchState,diceState){
+ const validState=value=>Array.isArray(value)&&value.length===24&&value.every(n=>typeof n==='number'&&Number.isFinite(n)&&Math.abs(n)<1000);
+ if(!Number.isInteger(Number(roll))||Number(roll)<1||Number(roll)>6||!validState(launchState)||!validState(diceState))return false;
+ if(topVal(Float64Array.from(diceState))!==Number(roll))return false;
+ const simulated=Float64Array.from(launchState);
+ runSteps(simulated,1e9);
+ return topVal(simulated)===Number(roll);
+}
 async function runNetEvent(ev){
- if(ev.type!=='roll'||!Number.isInteger(Number(ev.roll))||Number(ev.roll)<1||Number(ev.roll)>6)throw new Error('Некорректное сетевое событие.');
+ if(ev.type!=='roll'||!validNetRoll(ev.roll,ev.launchState,ev.diceState))throw new Error('Некорректное сетевое событие или недостоверный результат кости.');
  await replayNetDice(ev);
  await play(Number(ev.roll));
  if(ev.snapshot)applyNetSnapshot(ev.snapshot);
 }
 async function publishRoll(roll,actorUid=fbUser.uid,launchState=V.netLaunchState,diceState=Array.from(S)){
- if(!isHost||!roomRef||!Number.isInteger(Number(roll))||Number(roll)<1||Number(roll)>6)return;
+ if(!isHost||!roomRef||!validNetRoll(roll,launchState,diceState))return;
  const stateRef=roomRef.child('state');
  const current=await stateRef.once('value'),base=current.val()||{};
  const expected=activePlayerIndex()==null?null:memberList[activePlayerIndex()]?.uid;
@@ -690,7 +698,7 @@ async function publishRoll(roll,actorUid=fbUser.uid,launchState=V.netLaunchState
 function netRoll(roll,launchState=V.netLaunchState,diceState=Array.from(S)){
  if(!netMode){play(roll);return;}
  if(!started||!awaitingOrDraw()||!isMyTurn())return;
- if(!Number.isInteger(Number(roll))||Number(roll)<1||Number(roll)>6)return;
+ if(!validNetRoll(roll,launchState,diceState))return;
  const active=activePlayerIndex(),activeMember=memberList[active];
  if(!activeMember||activeMember.uid!==fbUser.uid)return;
  const request={
