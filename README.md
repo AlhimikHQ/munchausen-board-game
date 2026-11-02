@@ -52,36 +52,19 @@ npm test
 
 `test:rules` запускает локальный Firebase Realtime Database Emulator и проверяет запреты на чтение чужого игрового состояния, запись чужого хода, изменение чужого участника и конкурентное выделение одного места двум клиентам. `test:cleanup` проверяет политику срока жизни комнат и синтаксис Cloud Function.
 
-## Сборка APK и установка обновлений
+## Android APK
 
-GitHub Actions сначала выполняет статические и Firebase Rules Emulator-тесты. Для сборки распространяемого APK используется **release-подпись одним постоянным keystore**. Это обязательно для установки новой версии поверх старой: debug-сертификат GitHub runner меняется между изолированными CI-запусками.
+GitHub Actions runs the tests and builds an optimized release APK. No GitHub Secrets or manual key setup is required.
 
-### Одноразовая настройка подписи
+The repository contains one fixed **public debug signature** in `android/munchausen-debug.keystore.base64`. It is only an Android app identity used to allow updates to install over the previous version; it is not a security secret. Every build uses the same signature.
 
-Создайте ключ вне папки репозитория (например, в домашней директории Cloud Shell):
+The release build enables R8 code shrinking and resource shrinking. The CI run number is used for an increasing Android `versionCode`. The APK is uploaded as the `munchausen-apk` artifact.
 
-```bash
-cd ~
-keytool -genkeypair -v -keystore munchausen-release.jks -keyalg RSA -keysize 2048 -validity 10000 -alias munchausen-release
-base64 -w 0 munchausen-release.jks
-```
+**One-time migration:** Android cannot install an APK over an existing app when the signing certificate differs. Since older builds used temporary CI debug signatures, the first install of this fixed-signature build may require uninstalling the old app once. After that, new APKs update in place.
 
-Сохраните пароль keystore и пароль ключа. Скопируйте выведенную base64-строку и добавьте в GitHub → **Settings → Secrets and variables → Actions** следующие Repository secrets:
+Local single-player mode does not load Firebase. The Firebase SDK is loaded only when the network-game panel is opened. Multiplayer turn locks transact only on the small `state` node; state and event changes are sent together in one database update.
 
-- `ANDROID_KEYSTORE_BASE64` — base64-строка файла keystore;
-- `ANDROID_KEYSTORE_PASSWORD` — пароль keystore;
-- `ANDROID_KEY_ALIAS` — `munchausen-release`;
-- `ANDROID_KEY_PASSWORD` — пароль ключа.
-
-**Не добавляйте `munchausen-release.jks` в Git или в артефакты.** Потеря ключа лишит возможности выпускать обновления поверх уже установленных APK.
-
-После настройки каждый запуск GitHub Actions на `main` собирает подписанный `app-release.apk` в артефакте `munchausen-apk`. `versionCode` автоматически увеличивается для каждого запуска CI.
-
-### Важный момент при переходе с прежних APK
-
-Старые APK собирались с временным debug-ключом. Android не разрешает обновлять приложение, если сертификат новой сборки отличается. Поэтому **один раз** потребуется удалить старую debug-сборку и установить первый APK, подписанный постоянным ключом. После этого все следующие версии будут устанавливаться поверх предыдущих без удаления приложения.
-
-Параметры Android: minSdk 26 (Android 8), compileSdk 34, JDK 17, Android Gradle Plugin 8.5.2, Gradle 8.7.
+Android: minSdk 26 (Android 8), compileSdk 34, JDK 17, Android Gradle Plugin 8.5.2, Gradle 8.7.
 
 ## Веб-версия
 
