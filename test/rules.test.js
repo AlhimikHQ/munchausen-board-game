@@ -71,6 +71,7 @@ test("joining is a request; a requester can read only their own request", async 
     name: "Guest", createdAt: Date.now()
   }));
   await assertSucceeds(get(ref(guest, "rooms/123/joinRequests/guest")));
+  await assertFails(get(ref(guest, "rooms/123/joinRequests")));
   await assertFails(get(ref(guest, "rooms/123/members")));
   await assertFails(get(ref(guest, "rooms/123/state")));
   await assertFails(set(ref(guest, "rooms/123/joinRequests/other"), {
@@ -85,6 +86,7 @@ test("host can approve a player; a member can read the admitted room", async () 
   await assertSucceeds(set(ref(guest, "rooms/123/joinRequests/guest"), {
     name: "Guest", createdAt: Date.now()
   }));
+  await assertSucceeds(get(ref(host, "rooms/123/joinRequests")));
   await assertSucceeds(set(ref(host, "rooms/123/members"), {
     host: { name: "Host", seat: 0, online: true, ready: true, color: "#e02020" },
     guest: { name: "Guest", seat: 1, ready: false, online: true, color: "#1e5bff", joinedAt: Date.now() }
