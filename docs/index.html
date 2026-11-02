@@ -195,6 +195,7 @@ const ROOM_REUSE_MS=60*1000,ROOM_ABANDON_MS=24*60*60*1000;
 const DEFAULT_COLORS=['#e02020','#1e5bff','#1faa3c','#ffe94d','#fff'];
 let netMode=false,fbUser=null,roomRef=null,roomCode='',isHost=false,myIndex=-1,memberList=[];
 let lastEvent=0,roomSeq=0,roomMaxPlayers=3,roomStarting=false,publishingSeq=0,hostUidCurrent='';
+let rollRequestListener=null;
 let requestQueue=Promise.resolve(),authError='',authPromise=null;
 let connectionRef=null,connectionHandler=null,roomStatusRef=null,requestListener=null;
 let roomJoinPending=false,roomCreatePending=false,netUiEpoch=0;
@@ -268,7 +269,7 @@ function makeRoomCode(){return Array.from({length:3},randomDie).join('')}
 function isReusableRoom(room,now=Date.now()){
  if(!room)return true;
  const st=room.state||{};
- if(st.status==='closed'&&Number(st.closedAt||0)>0&&now-Number(st.closedAt)>=ROOM_REUSE_MS)return true;
+ if(st.status==='closed'&&(!Number(st.closedAt||0)||now-Number(st.closedAt)>=ROOM_REUSE_MS))return true;
  const host=room.members&&room.members[room.hostUid];
  return !!(host&&host.online===false&&Number(st.lastActivityAt||room.createdAt||0)>0&&now-Number(st.lastActivityAt||room.createdAt)>=ROOM_ABANDON_MS);
 }
@@ -335,18 +336,36 @@ async function approveRoomRequest(uid,approve){
  }catch(e){roomStatus('Не удалось обработать запрос: '+netErr(e));}
 }
 function startHostRequestListener(){
- if(!isHost||!roomRef||requestListener)return;
- const ref=roomRef.child('joinRequests');
- requestListener=snap=>{
-  const request=snap.val();if(!request||request.status==='rejected')return;
-  pendingJoinRequests[snap.key]=request;updateJoinRequestPanel();
- };
- ref.on('child_added',requestListener);
- ref.on('child_changed',requestListener);
+ if(!isHost||!roomRef)return;
+ if(!requestListener){
+  const ref=roomRef.child('joinRequests');
+  requestListener=snap=>{
+   const request=snap.val();if(!request||request.status==='rejected')return;
+   pendingJoinRequests[snap.key]=request;updateJoinRequestPanel();
+  };
+  ref.on('child_added',requestListener);
+  ref.on('child_changed',requestListener);
+ }
+ if(!rollRequestListener){
+  rollRequestListener=snap=>{
+   const req=snap.val();if(!req)return;
+   requestQueue=requestQueue.then(async()=>{
+    try{
+     if(!isHost||req.uid!==snap.val().uid||!Number.isInteger(Number(req.roll))||Number(req.roll)<1||Number(req.roll)>6)return;
+     const stateSnap=await roomRef.child('state').once('value'),state=stateSnap.val()||{};
+     const active=activePlayerIndex(),expected=active==null?null:memberList[active]?.uid;
+     if(state.status!=='started'||state.turnUid!==req.uid||expected!==req.uid||!awaiting())return;
+     await publishRoll(Number(req.roll),req.uid,req.launchState,req.diceState);
+    }finally{if(isHost)await snap.ref.remove();}
+   }).catch(e=>roomStatus('Ошибка обработки хода: '+netErr(e)));
+  };
+  roomRef.child('requests').on('child_added',rollRequestListener);
+ }
 }
 function stopHostRequestListener(){
  if(roomRef&&requestListener){roomRef.child('joinRequests').off('child_added',requestListener);roomRef.child('joinRequests').off('child_changed',requestListener);}
- requestListener=null;pendingJoinRequests={};updateJoinRequestPanel();
+ if(roomRef&&rollRequestListener)roomRef.child('requests').off('child_added',rollRequestListener);
+ requestListener=null;rollRequestListener=null;pendingJoinRequests={};updateJoinRequestPanel();
 }
 function watchMembers(){
  roomRef.child('members').on('value',snap=>{
@@ -516,23 +535,7 @@ function queueAuthoritativeState(st){
 function watchRoomState(){
  roomStatusRef=roomRef.child('state');
  roomStatusRef.on('value',snap=>queueAuthoritativeState(snap.val()),e=>roomStatus('Ошибка чтения состояния игры: '+netErr(e)));
- roomRef.child('requests').on('child_added',snap=>{
-  const req=snap.val();if(!req)return;
-  requestQueue=requestQueue.then(async()=>{
-   try{
-    if(!isHost||req.uid!==snap.val().uid||!Number.isInteger(Number(req.roll))||Number(req.roll)<1||Number(req.roll)>6)return;
-    const stateSnap=await roomRef.child('state').once('value'),state=stateSnap.val()||{};
-    const active=activePlayerIndex(),expected=active==null?null:memberList[active]?.uid;
-    if(state.status!=='started'||state.turnUid!==req.uid||expected!==req.uid||!awaiting())return;
-    await publishRoll(Number(req.roll),req.uid,req.launchState,req.diceState);
-   }finally{await snap.ref.remove();}
-  }).catch(e=>roomStatus('Ошибка обработки хода: '+netErr(e)));
- },e=>roomStatus('Ошибка подписки на запросы ходов: '+netErr(e)));
- if(isHost){
-  const reqRef=roomRef.child('joinRequests');
-  reqRef.on('child_added',snap=>{const r=snap.val();if(r&&r.status!=='rejected'){pendingJoinRequests[snap.key]=r;updateJoinRequestPanel()}});
-  reqRef.on('child_changed',snap=>{const r=snap.val();if(r&&r.status!=='rejected')pendingJoinRequests[snap.key]=r;else delete pendingJoinRequests[snap.key];updateJoinRequestPanel()});
- }
+ if(isHost)startHostRequestListener();
 }
 function awaitingOrDraw(){return awaiting()}
 function initNetworkBoard(players){
