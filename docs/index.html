@@ -342,7 +342,7 @@ function updateJoinRequestPanel(){
   panel.appendChild(row);
  });
 }
-let pendingJoinRequests={};
+let pendingJoinRequests={},pendingJoinRef=null;
 async function approveRoomRequest(uid,approve){
  if(!isHost||!roomRef||started||!uid)return;
  const reqRef=roomRef.child('joinRequests/'+uid);
@@ -354,7 +354,9 @@ async function approveRoomRequest(uid,approve){
   const tx=await memberRef.transaction(current=>{
    const members=current||{};
    if(members[uid]||Object.keys(members).length>=roomMaxPlayers)return;
-   const seat=Object.keys(members).length;
+   const usedSeats=new Set(Object.values(members).map(member=>Number(member.seat)).filter(Number.isInteger));
+   let seat=0;while(usedSeats.has(seat)&&seat<roomMaxPlayers)seat++;
+   if(seat>=roomMaxPlayers)return;
    members[uid]={name:String(request.name||('Игрок '+(seat+1))).slice(0,32),seat,ready:false,online:false,color:DEFAULT_COLORS[seat],joinedAt:firebase.database.ServerValue.TIMESTAMP};
    return members;
   },null,false);
@@ -368,6 +370,7 @@ function startHostRequestListener(){
   const ref=roomRef.child('joinRequests');
   requestListener=snap=>{
    const request=snap.val();if(!request||request.status==='rejected')return;
+   if(Date.now()-Number(request.createdAt||0)>120000){roomRef.child('joinRequests/'+snap.key).remove().catch(e=>console.warn('expire join request',e));return;}
    pendingJoinRequests[snap.key]=request;updateJoinRequestPanel();
   };
   ref.on('child_added',requestListener);
@@ -520,16 +523,15 @@ async function joinRoom(){
   if(!/^[1-6]{3}$/.test(code))throw new Error('Код комнаты должен состоять из трёх кубиков.');
   const ref=firebase.database().ref('rooms/'+code),uid=fbUser.uid;
   const requestRef=ref.child('joinRequests/'+uid);
+  pendingJoinRef=requestRef;
   await withTimeout(requestRef.set({name:'Игрок',createdAt:firebase.database.ServerValue.TIMESTAMP}),12000,'Не удалось отправить запрос на вход');
-  await requestRef.onDisconnect().remove();
   roomStatus('Запрос отправлен создателю. Ожидаем подтверждения.');
   const member=await waitForMembership(ref,uid,90000);
-  if(stale()){await requestRef.remove();return;}
+  if(stale()){await requestRef.remove();pendingJoinRef=null;return;}
   const settingsSnap=await ref.child('settings').once('value');
   const settings=settingsSnap.val()||{};
   roomMaxPlayers=Math.max(2,Math.min(5,Number(settings.playerCount)||5));
-  await requestRef.onDisconnect().cancel();
-  roomCode=code;roomRef=ref;netMode=true;isHost=false;roomSeq=0;lastEvent=0;myIndex=Number(member.seat)||0;persistRoomSession();
+  roomCode=code;pendingJoinRef=null;roomRef=ref;netMode=true;isHost=false;roomSeq=0;lastEvent=0;myIndex=Number(member.seat)||0;persistRoomSession();
   np=roomMaxPlayers;$('#pn').textContent=np;
   const onlineRef=ref.child('members/'+uid+'/online'),offlineRef=ref.child('members/'+uid+'/offlineAt');
   await Promise.all([onlineRef.onDisconnect().set(false),offlineRef.onDisconnect().set(firebase.database.ServerValue.TIMESTAMP)]);
@@ -538,7 +540,10 @@ async function joinRoom(){
   $('#roomJoinDice').hidden=true;$('#roomCodeDisplay').hidden=false;$('#joinSlot').hidden=false;
   $('#roomCreate').hidden=true;$('#netJoinToggle').hidden=true;$('#pm').disabled=true;$('#pp').disabled=true;
   updateLobbyControls();roomStatus('В комнате. Ожидание остальных игроков.');
- }catch(e){console.error('joinRoom',e);roomStatus('Не удалось войти: '+netErr(e));}
+ }catch(e){
+  console.error('joinRoom',e);roomStatus('Не удалось войти: '+netErr(e));
+  if(pendingJoinRef){pendingJoinRef.remove().catch(()=>{});pendingJoinRef=null;}
+ }
  finally{roomJoinPending=false;}
 }
 function syncFromAuthoritativeState(st){
