@@ -548,7 +548,11 @@ async function createRoom(){
   await onlineRef.set(true);await offlineRef.remove();
   if(created!==roomRef||generation!==roomSessionGeneration)return;
   updateLobbyControls();roomStatus('Комната создана. Ожидание игроков.');
- }catch(e){console.error('createRoom',e);roomStatus('Ошибка создания комнаты: '+netErr(e));}
+ }catch(e){
+  console.error('createRoom',e);const message='Ошибка создания комнаты: '+netErr(e);
+  if(netMode&&isHost&&roomRef)leaveNetworkSetup();
+  roomStatus(message);
+ }
  finally{roomCreatePending=false;}
 }
 async function waitForMembership(ref,uid,timeoutMs=90000){
@@ -605,8 +609,10 @@ async function joinRoom(){
   if(ref!==roomRef||generation!==roomSessionGeneration)return;
   updateLobbyControls();roomStatus('В комнате. Ожидание остальных игроков.');
  }catch(e){
-  console.error('joinRoom',e);roomStatus('Не удалось войти: '+netErr(e));
+  console.error('joinRoom',e);const message='Не удалось войти: '+netErr(e);
+  if(netMode&&roomRef)leaveNetworkSetup();
   if(pendingJoinRef){pendingJoinRef.remove().catch(()=>{});pendingJoinRef=null;}
+  roomStatus(message);
  }finally{roomJoinPending=false;}
 }
 function syncFromAuthoritativeState(st){
