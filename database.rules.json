@@ -38,7 +38,8 @@
             ".read": "auth != null && (auth.uid === $uid || root.child('rooms').child($roomCode).child('hostUid').val() === auth.uid)",
             ".write": "auth != null && ((root.child('rooms').child($roomCode).child('hostUid').val() === auth.uid) || (auth.uid === $uid && data.exists() && !newData.exists()) || (auth.uid === $uid && root.child('rooms').child($roomCode).child('state').child('status').val() === 'lobby' && !root.child('rooms').child($roomCode).child('members').child(auth.uid).exists() && root.child('rooms').child($roomCode).child('members').numChildren() < root.child('rooms').child($roomCode).child('maxPlayers').val() && newData.child('name').isString() && newData.child('name').val().length <= 32 && newData.child('createdAt').isNumber()))",
             ".validate": "newData.hasChildren(['name', 'createdAt']) || newData.child('status').val() === 'rejected'"
-          }
+          },
+          ".read": "auth != null && root.child('rooms').child($roomCode).child('hostUid').val() === auth.uid"
         },
         "settings": {
           ".read": "auth != null && root.child('rooms').child($roomCode).child('members').child(auth.uid).exists()",
