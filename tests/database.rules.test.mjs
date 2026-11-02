@@ -76,9 +76,19 @@ test('authenticated non-members can see public metadata but not private room dat
   await assertFails(get(ref(db, roomPath + '/requests')));
 });
 
-test('a user can inspect their own membership node before joining', async () => {
+test('a room can be created by its authenticated host with a valid schema', async () => {
+  const db = env.authenticatedContext('host-1').database();
+  await assertSucceeds(set(ref(db, roomPath), fixture('lobby')));
+  await assertSucceeds(get(ref(db, roomPath + '/state')));
+  const invalid = fixture('lobby');
+  invalid.settings.playerCount = 5;
+  await assertFails(set(ref(db, 'rooms/124'), invalid));
+});
+
+test('a user can inspect only their own membership node before joining', async () => {
   const db = env.authenticatedContext('new-player').database();
   await assertSucceeds(get(ref(db, roomPath + '/members/new-player')));
+  await assertFails(get(ref(db, roomPath + '/members/player-1')));
   await assertFails(get(ref(db, roomPath + '/members')));
 });
 
@@ -107,9 +117,11 @@ test('a member can update their own ready state and colour, but not another seat
 test('a member can create only one valid current-turn request under their UID', async () => {
   const db = memberDb();
   const numericState = Array.from({ length: 24 }, () => 0);
+  const diceState = numericState.slice();
+  diceState[15] = -1; // The top face of the serialized die is four.
   const request = {
     requestId: 'player-1', uid: 'player-1', roll: 4, turnToken: 'turn-0-player-1',
-    launchState: numericState, diceState: numericState, createdAt: 1700000000000
+    launchState: numericState, diceState, createdAt: 1700000000000
   };
   await assertFails(set(ref(db, roomPath + '/requests/player-1'), { ...request, turnToken: 'stale-token' }));
   await assertFails(set(ref(db, roomPath + '/requests/player-1'), { ...request, roll: 7 }));
