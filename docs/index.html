@@ -221,7 +221,13 @@ function loadFirebaseSdk(){
  if(firebaseSdkPromise)return firebaseSdkPromise;
  firebaseSdkPromise=(async()=>{
   const base='https://www.gstatic.com/firebasejs/13.1.0/';
-  for(const file of ['firebase-app-compat.js','firebase-auth-compat.js','firebase-database-compat.js']){
+  const files=[
+   ['firebase-app-compat.js',()=>!!window.firebase],
+   ['firebase-auth-compat.js',()=>!!window.firebase&&typeof firebase.auth==='function'],
+   ['firebase-database-compat.js',()=>!!window.firebase&&typeof firebase.database==='function']
+  ];
+  for(const [file,ready] of files){
+   if(ready())continue;
    await new Promise((resolve,reject)=>{
     const script=document.createElement('script');script.src=base+file;script.async=true;
     script.onload=resolve;script.onerror=()=>reject(new Error('Firebase SDK load failed: '+file));
@@ -652,7 +658,7 @@ async function leaveNetworkSetup(persist=true){
  }
 }
 document.querySelector('#netToggle').onclick=()=>{const opening=$('#net').hidden;$('#net').hidden=!opening;$('#netToggle').setAttribute('aria-expanded',String(opening));netUiEpoch++;
- if(opening){$('#roomCreate').hidden=false;$('#netJoinToggle').hidden=false;$('#roomJoinDice').hidden=true;$('#roomCodeDisplay').hidden=true;$('#joinSlot').hidden=false;joinDiceValues=[1,1,1];renderJoinDice();ensureAuth().then(ok=>{if(ok)restoreSavedRoom().catch(e=>reportFirebase('Не удалось восстановить комнату',e));});}
+ if(opening){$('#roomCreate').hidden=false;$('#netJoinToggle').hidden=false;$('#roomJoinDice').hidden=true;$('#roomCodeDisplay').hidden=true;$('#joinSlot').hidden=false;joinDiceValues=[1,1,1];renderJoinDice();ensureAuth().then(ok=>{if(ok&&!$('#net').hidden)restoreSavedRoom().catch(e=>reportFirebase('Не удалось восстановить комнату',e));});}
  else leaveNetworkSetup(true);
 };
 document.querySelector('#netJoinToggle').onclick=()=>{$('#roomCreate').hidden=true;$('#netJoinToggle').hidden=true;$('#roomJoinDice').hidden=false;$('#roomCodeDisplay').hidden=true;$('#joinSlot').hidden=true;joinDiceValues=[1,1,1];renderJoinDice();};
