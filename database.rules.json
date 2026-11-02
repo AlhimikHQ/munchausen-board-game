@@ -14,15 +14,15 @@
             ".read": "auth != null && (auth.uid === $uid || root.child('rooms').child($roomCode).child('members').child(auth.uid).exists())",
             ".write": "auth != null && (root.child('rooms').child($roomCode).child('hostUid').val() === auth.uid || (auth.uid === $uid && !newData.exists()))",
             "ready": {
-              ".write": "auth != null && (auth.uid === $uid || root.child('rooms').child($roomCode).child('hostUid').val() === auth.uid)",
+              ".write": "auth != null && root.child('rooms').child($roomCode).child('members').child($uid).exists() && (auth.uid === $uid || root.child('rooms').child($roomCode).child('hostUid').val() === auth.uid)",
               ".validate": "newData.isBoolean()"
             },
             "online": {
-              ".write": "auth != null && (auth.uid === $uid || root.child('rooms').child($roomCode).child('hostUid').val() === auth.uid)",
+              ".write": "auth != null && root.child('rooms').child($roomCode).child('members').child($uid).exists() && (auth.uid === $uid || root.child('rooms').child($roomCode).child('hostUid').val() === auth.uid)",
               ".validate": "newData.isBoolean()"
             },
             "color": {
-              ".write": "auth != null && (auth.uid === $uid || root.child('rooms').child($roomCode).child('hostUid').val() === auth.uid)",
+              ".write": "auth != null && root.child('rooms').child($roomCode).child('members').child($uid).exists() && (auth.uid === $uid || root.child('rooms').child($roomCode).child('hostUid').val() === auth.uid)",
               ".validate": "newData.isString() && newData.val().length === 7"
             }
           }
