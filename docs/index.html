@@ -195,7 +195,7 @@ const ROOM_REUSE_MS=60*1000,ROOM_ABANDON_MS=24*60*60*1000;
 const DEFAULT_COLORS=['#e02020','#1e5bff','#1faa3c','#ffe94d','#fff'];
 let netMode=false,fbUser=null,roomRef=null,roomCode='',isHost=false,myIndex=-1,memberList=[];
 let lastEvent=0,roomSeq=0,roomMaxPlayers=3,roomStarting=false,publishingSeq=0,hostUidCurrent='';
-let rollRequestListener=null,offlinePruneTimer=null;
+let rollRequestListener=null,requestRemovedListener=null,offlinePruneTimer=null,activeJoinWaitCancel=null,roomSessionGeneration=0;
 let requestQueue=Promise.resolve(),authError='',authPromise=null;
 let connectionRef=null,connectionHandler=null,roomStatusRef=null,requestListener=null;
 let roomJoinPending=false,roomCreatePending=false,netUiEpoch=0;
@@ -373,8 +373,10 @@ function startHostRequestListener(){
    if(Date.now()-Number(request.createdAt||0)>120000){roomRef.child('joinRequests/'+snap.key).remove().catch(e=>console.warn('expire join request',e));return;}
    pendingJoinRequests[snap.key]=request;updateJoinRequestPanel();
   };
+  requestRemovedListener=snap=>{delete pendingJoinRequests[snap.key];updateJoinRequestPanel()};
   ref.on('child_added',requestListener);
   ref.on('child_changed',requestListener);
+  ref.on('child_removed',requestRemovedListener);
  }
  if(!rollRequestListener){
   rollRequestListener=snap=>{
@@ -395,15 +397,18 @@ function startHostRequestListener(){
 }
 function stopHostRequestListener(){
  if(roomRef&&requestListener){roomRef.child('joinRequests').off('child_added',requestListener);roomRef.child('joinRequests').off('child_changed',requestListener);}
+ if(roomRef&&requestRemovedListener)roomRef.child('joinRequests').off('child_removed',requestRemovedListener);
  if(roomRef&&rollRequestListener)roomRef.child('requests').off('child_added',rollRequestListener);
- requestListener=null;rollRequestListener=null;pendingJoinRequests={};updateJoinRequestPanel();
+ requestListener=null;requestRemovedListener=null;rollRequestListener=null;pendingJoinRequests={};updateJoinRequestPanel();
 }
 function watchMembers(){
- roomRef.child('members').on('value',snap=>{
+ const ref=roomRef,generation=roomSessionGeneration;
+ ref.child('members').on('value',snap=>{
+  if(ref!==roomRef||generation!==roomSessionGeneration)return;
   memberList=[];snap.forEach(x=>memberList.push({uid:x.key,...(x.val()||{})}));
   memberList.sort((a,b)=>(Number(a.seat)||0)-(Number(b.seat)||0));
   if(offlinePruneTimer)clearTimeout(offlinePruneTimer);
-  if(isHost&&memberList.some(m=>m.uid!==fbUser?.uid&&m.online===false&&Number(m.offlineAt||0)>0))offlinePruneTimer=setTimeout(maybePruneOfflineMembers,30000);
+  scheduleOfflinePrune();
   myIndex=memberList.findIndex(m=>m.uid===fbUser?.uid);
   const defaults=DEFAULT_COLORS.slice();
   memberList.forEach((m,i)=>{if(m.color)defaults[i]=m.color});
@@ -411,17 +416,27 @@ function watchMembers(){
   if(started){P.forEach((p,i)=>{if(COL[i]){p.e.style.background=COL[i];p.e.style.setProperty('--c',COL[i])}});refreshSw();}
   updateLobbyControls();updateJoinRequestPanel();maybeStartNetworkGame();maybeElectHost();
  },e=>roomStatus('Ошибка чтения списка игроков: '+netErr(e)));
- roomRef.child('settings').on('value',snap=>{
+ ref.child('settings').on('value',snap=>{
+  if(ref!==roomRef||generation!==roomSessionGeneration)return;
   const settings=snap.val()||{};
   roomMaxPlayers=Math.max(2,Math.min(5,Number(settings.playerCount)||roomMaxPlayers||3));
   np=roomMaxPlayers;$('#pn').textContent=np;
   updateLobbyControls();
  },e=>roomStatus('Ошибка чтения настроек комнаты: '+netErr(e)));
- roomRef.child('hostUid').on('value',snap=>{
+ ref.child('hostUid').on('value',snap=>{
+  if(ref!==roomRef||generation!==roomSessionGeneration)return;
   const nextHost=snap.val();hostUidCurrent=nextHost||'';isHost=nextHost===fbUser?.uid;
-  if(isHost)startHostRequestListener();else stopHostRequestListener();
+  if(isHost){startHostRequestListener();scheduleOfflinePrune()}else stopHostRequestListener();
   updateJoinRequestPanel();
  },e=>roomStatus('Ошибка определения ведущего: '+netErr(e)));
+}
+function scheduleOfflinePrune(){
+ if(offlinePruneTimer)clearTimeout(offlinePruneTimer);
+ if(!isHost||started)return;
+ const stale=memberList.filter(m=>m.uid!==fbUser?.uid&&m.online===false&&Number(m.offlineAt||0)>0);
+ if(!stale.length)return;
+ const wait=Math.max(0,30000-Math.min(...stale.map(m=>Date.now()-Number(m.offlineAt))));
+ offlinePruneTimer=setTimeout(()=>{maybePruneOfflineMembers();scheduleOfflinePrune()},wait);
 }
 async function maybeElectHost(){
  if(!netMode||!roomRef||!fbUser||isHost||!memberList.length)return;
@@ -433,7 +448,7 @@ async function maybeElectHost(){
    if(host&&host.online!==false)return;
    return fbUser.uid;
   },null,false);
-  if(tx.committed){isHost=true;startHostRequestListener();}
+  if(tx.committed){isHost=true;startHostRequestListener();scheduleOfflinePrune();}
  }catch(e){console.warn('host election',e);}
 }
 function maybePruneOfflineMembers(){
@@ -503,9 +518,12 @@ async function waitForMembership(ref,uid,timeoutMs=90000){
   let settled=false;
   const finish=(error,value)=>{
    if(settled)return;settled=true;clearTimeout(timer);
+   if(activeJoinWaitCancel===cancel)activeJoinWaitCancel=null;
    memberRef.off('value',onMember);requestRef.off('value',onRequest);
    if(error)reject(error);else resolve(value);
   };
+  const cancel=error=>finish(error||new Error('Вход отменён.'));
+  activeJoinWaitCancel=cancel;
   const onMember=snap=>{if(snap.exists())finish(null,snap.val())};
   const onRequest=snap=>{const r=snap.val();if(r&&r.status==='rejected')finish(new Error('Запрос на вход отклонён создателем.'))};
   const timer=setTimeout(()=>finish(new Error('Время ожидания подтверждения истекло.')),timeoutMs);
@@ -585,8 +603,9 @@ function queueAuthoritativeState(st){
  if(st.status==='started'&&started)syncFromAuthoritativeState(st);
 }
 function watchRoomState(){
- roomStatusRef=roomRef.child('state');
- roomStatusRef.on('value',snap=>queueAuthoritativeState(snap.val()),e=>roomStatus('Ошибка чтения состояния игры: '+netErr(e)));
+ const ref=roomRef,generation=roomSessionGeneration;
+ roomStatusRef=ref.child('state');
+ roomStatusRef.on('value',snap=>{if(ref===roomRef&&generation===roomSessionGeneration)queueAuthoritativeState(snap.val())},e=>{if(ref===roomRef&&generation===roomSessionGeneration)roomStatus('Ошибка чтения состояния игры: '+netErr(e))});
  if(isHost)startHostRequestListener();
 }
 function awaitingOrDraw(){return awaiting()}
@@ -746,7 +765,12 @@ function netRoll(roll,launchState=V.netLaunchState,diceState=Array.from(S)){
 }
 function leaveNetworkSetup(){
  const ref=roomRef,uid=fbUser&&fbUser.uid,host=isHost,active=netMode;
- netMode=false;isHost=false;roomCode='';roomRef=null;memberList=[];pendingJoinRequests={};roomStarting=false;roomMaxPlayers=np;roomSeq=0;lastEvent=0;
+ if(activeJoinWaitCancel)activeJoinWaitCancel(new Error('Вход отменён.'));
+ if(roomRef)stopHostRequestListener();
+ if(offlinePruneTimer)clearTimeout(offlinePruneTimer);offlinePruneTimer=null;
+ if(pendingJoinRef){pendingJoinRef.remove().catch(()=>{});pendingJoinRef=null;}
+ roomSessionGeneration++;
+ netMode=false;isHost=false;roomCode='';roomRef=null;roomStatusRef=null;memberList=[];pendingJoinRequests={};hostUidCurrent='';requestListener=null;requestRemovedListener=null;rollRequestListener=null;roomStarting=false;roomMaxPlayers=np;roomSeq=0;lastEvent=0;
  $('#roomCreate').hidden=false;$('#netJoinToggle').hidden=false;$('#roomJoinDice').hidden=true;$('#roomCodeDisplay').hidden=true;$('#joinSlot').hidden=false;
  $('#pm').disabled=false;$('#pp').disabled=false;$('#roomCreate').disabled=false;$('#roomJoinConfirm').disabled=false;
  $('#go').disabled=false;$('#go').textContent='▶';$('#go').classList.remove('lobby-ready');$('#go').style.background='';
