@@ -241,7 +241,7 @@ async function cleanupInactiveMembers(){
  for(const m of stale){try{await roomRef.child('slots/'+m.seat).remove();await roomRef.child('members/'+m.uid).remove();}catch(e){console.warn('Firebase stale member cleanup:',netErr(e));}}
 }
 function updateRoomPlayerColors(colors){
- COL.splice(0,COL.length,...NETWORK_DEFAULT_COLORS.map((c,i)=>{const seat=networkPlayers[i]&&Number.isInteger(networkPlayers[i].seat)?networkPlayers[i].seat:i;return colors&&colors[seat]||c;}));refreshSw();
+ COL.splice(0,COL.length,...NETWORK_DEFAULT_COLORS.map((c,i)=>{const playerSeat=networkPlayers[i]&&Number.isInteger(networkPlayers[i].seat)?networkPlayers[i].seat:(memberList[i]&&Number.isInteger(memberList[i].seat)?memberList[i].seat:i);return colors&&colors[playerSeat]||c;}));refreshSw();
  P.forEach((p,i)=>{if(p&&p.e){p.e.style.background=COL[i];p.e.style.setProperty('--c',COL[i]);}});
 }
 function watchMembers(){
@@ -310,7 +310,8 @@ async function joinRoom(){
    }
    if(claimedSeat<0)return;
    member={name:'Игрок '+(claimedSeat+1),ready:false,seat:claimedSeat,joinedAt:Date.now(),connected:true,lastSeenAt:Date.now()};
-   await memberRef.set(member);createdMember=true;
+   createdMember=true;
+   await memberRef.set(member);
   }
   if(stale()){if(createdMember){try{await memberRef.remove();await ref.child('slots/'+claimedSeat).remove();}catch(e){}}return;}
   await memberRef.update({connected:true,lastSeenAt:Date.now()});
