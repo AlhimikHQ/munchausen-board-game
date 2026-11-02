@@ -165,6 +165,7 @@ test('the host can lock only game state and atomically publish state plus event'
   const stateRef = ref(db, roomPath + '/state');
 
   const lock = await assertSucceeds(runTransaction(stateRef, state => {
+    if (state === null) return null; // Retry with the authoritative server state when the local cache is empty.
     if (!state || state.status !== 'started' || state.processing) return;
     state.processing = {
       requestId: 'player-1', uid: 'player-1', turnToken: state.turnToken, claimedAt: now
