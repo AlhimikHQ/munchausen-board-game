@@ -4,18 +4,19 @@ import fs from 'node:fs';
 import vm from 'node:vm';
 
 const html = fs.readFileSync(new URL('../docs/index.html', import.meta.url), 'utf8');
-const scripts = [...html.matchAll(/<script>([\\s\\S]*?)<\\/script>/g)];
-const source = scripts.map(match => match[1]).join('\\n');
+const scriptStart = html.indexOf('<script>');
+const scriptEnd = html.lastIndexOf('</script>');
+assert.ok(scriptStart >= 0 && scriptEnd > scriptStart, 'inline game script must exist');
+const source = html.slice(scriptStart + '<script>'.length, scriptEnd);
 
 test('the complete game script parses as JavaScript', () => {
-  assert.equal(scripts.length, 1, 'expected exactly one inline game script');
   assert.doesNotThrow(() => new vm.Script(source, { filename: 'docs/index.html' }));
 });
 
 test('all Firebase compat scripts use the same pinned SDK release', () => {
-  assert.match(html, /firebasejs\\/12\\.19\\.0\\/firebase-app-compat\\.js/);
-  assert.match(html, /firebasejs\\/12\\.19\\.0\\/firebase-auth-compat\\.js/);
-  assert.match(html, /firebasejs\\/12\\.19\\.0\\/firebase-database-compat\\.js/);
+  for (const asset of ['firebase-app-compat.js', 'firebase-auth-compat.js', 'firebase-database-compat.js']) {
+    assert.ok(html.includes('firebasejs/12.19.0/' + asset), asset + ' must be version pinned');
+  }
 });
 
 test('room codes contain exactly three dice', () => {
