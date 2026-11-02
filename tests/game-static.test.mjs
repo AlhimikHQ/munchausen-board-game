@@ -56,7 +56,7 @@ test('room codes contain exactly three dice', () => {
 test('multiplayer transactions touch only the small state node and retry an empty local cache', () => {
   assert.ok(source.includes('function stateTransaction(updateFn)'));
   assert.ok(source.includes('state=>state===null?null:updateFn(state)'));
-  assert.equal((source.match(/stateTransaction\\(/g) || []).length, 4);
+  assert.equal(source.split('stateTransaction(').length - 1, 4);
   assert.ok(source.includes('await roomRef.update(updates)'));
   assert.ok(!source.includes('roomRef.transaction('));
   assert.ok(!source.includes('roomTransaction('));
