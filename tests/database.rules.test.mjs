@@ -131,6 +131,56 @@ test('a member can create only one valid current-turn request under their UID', 
   await assertFails(get(ref(db, roomPath + '/requests')));
 });
 
+test('a new authenticated player can claim a free seat and publish membership, presence and readiness', async () => {
+  const lobby = fixture('lobby');
+  delete lobby.slots[1];
+  delete lobby.members['player-1'];
+  delete lobby.members['player-2'];
+  await seedRoom(roomPath, lobby);
+
+  const db = env.authenticatedContext('guest-new').database();
+  const now = 1700000000002;
+  const claim = await assertSucceeds(runTransaction(ref(db, roomPath + '/slots/1'), current => {
+    if (current !== null) return;
+    return { uid: 'guest-new', seat: 1, joinedAt: now };
+  }));
+  assert.equal(claim.committed, true);
+
+  await assertSucceeds(set(ref(db, roomPath + '/members/guest-new'), {
+    name: 'Игрок 2', ready: false, seat: 1, joinedAt: now, connected: true, lastSeenAt: now
+  }));
+  await assertSucceeds(update(ref(db, roomPath + '/members/guest-new'), {
+    connected: true, lastSeenAt: now + 1
+  }));
+  await assertSucceeds(set(ref(db, roomPath + '/members/guest-new/ready'), true));
+
+  const saved = await assertSucceeds(get(ref(db, roomPath + '/members/guest-new')));
+  assert.equal(saved.val().ready, true);
+  assert.equal(saved.val().connected, true);
+});
+
+test('the host can atomically publish the authoritative game state and event log', async () => {
+  const db = env.authenticatedContext('host-1').database();
+  const now = 1700000000100;
+  const result = await assertSucceeds(runTransaction(ref(db, roomPath), current => {
+    if (!current || current.meta.hostUid !== 'host-1') return;
+    current.state = {
+      status: 'started', seq: 1, activeUid: 'player-1', turnToken: 'turn-1',
+      processing: null, players: [], snapshot: { version: 3, seq: 1 }, updatedAt: now
+    };
+    current.events = {
+      '000000000001': { seq: 1, type: 'roll', roll: 4, by: 'player-1', createdAt: now }
+    };
+    current.meta.updatedAt = now;
+    return current;
+  }));
+  assert.equal(result.committed, true);
+  const state = await assertSucceeds(get(ref(db, roomPath + '/state')));
+  assert.equal(state.val().seq, 1);
+  const events = await assertSucceeds(get(ref(db, roomPath + '/events')));
+  assert.equal(events.val()['000000000001'].roll, 4);
+});
+
 test('concurrent seat transactions cannot allocate the same slot twice', async () => {
   const initial = fixture('lobby');
   initial.members = { 'host-1': initial.members['host-1'] };
