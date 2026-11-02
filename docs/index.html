@@ -916,10 +916,10 @@ if(l<.12)return'k';if(l>.93&&s<.5)return'w';if(s<.12)return'g';if(h<15||h>=345)r
 const FALL=['#e02020','#1e5bff','#1faa3c','#ffe94d','#ffffff','#9b30ff','#ff8c00','#00bcd4','#ff4fa3','#000000'];
 function fixDup(){for(let i=1;i<np;i++){const used=new Set(COL.slice(0,np).map((c,k)=>k!=i?fam(c):null));if(used.has(fam(COL[i]))){const c=FALL.find(x=>!used.has(fam(x)));if(c)COL[i]=c}}}
 const swEl=$('#sw');
-function refreshSw(){fixDup();swEl.innerHTML='';for(let i=0;i<np;i++){const b=document.createElement('button');b.style.background=COL[i];b.disabled=netMode&&i!==myIndex;b.onclick=()=>openPal(i);swEl.appendChild(b)}}
+function refreshSw(){fixDup();swEl.innerHTML='';for(let i=0;i<np;i++){const b=document.createElement('button');b.style.background=COL[i];b.disabled=netMode&&i!==myIndex&&!isHost;b.onclick=()=>openPal(i);swEl.appendChild(b)}}
 function openPal(i){const o=document.createElement('div');o.id='pal';const used=new Set(COL.slice(0,np).map((c,k)=>k!=i?fam(c):null));
 o.innerHTML='<div class="card"><div class="t"><span style="color:'+COL[i]+'">●</span> 🎨</div><div class="g"></div></div>';const g=o.querySelector('.g');
-PAL.forEach(c=>{const b=document.createElement('button');b.style.background=c;if(used.has(fam(c)))b.disabled=true;if(nzc(COL[i])==c)b.className='cur';b.onclick=()=>{COL[i]=c;o.remove();refreshSw();if(netMode&&roomRef&&i===myIndex)roomRef.child('members/'+fbUser.uid+'/color').set(c).catch(e=>roomStatus('Не удалось сохранить цвет: '+netErr(e)))};g.appendChild(b)});
+PAL.forEach(c=>{const b=document.createElement('button');b.style.background=c;if(used.has(fam(c)))b.disabled=true;if(nzc(COL[i])==c)b.className='cur';b.onclick=()=>{COL[i]=c;o.remove();refreshSw();if(netMode&&roomRef&&memberList[i]&&(i===myIndex||isHost))roomRef.child('members/'+memberList[i].uid+'/color').set(c).catch(e=>roomStatus('Не удалось сохранить цвет: '+netErr(e)))};g.appendChild(b)});
 o.onclick=e=>{if(e.target===o)o.remove()};document.body.appendChild(o)}
 $('#pm').onclick=()=>{np=Math.max(2,np-1);$('#pn').textContent=np;refreshSw()};$('#pp').onclick=()=>{np=Math.min(5,np+1);$('#pn').textContent=np;refreshSw()};
 refreshSw();
