@@ -11,8 +11,36 @@ permissions:
   contents: read
 
 jobs:
-  build:
+  test:
+    name: Firebase and game tests
     runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Set up JDK 17 for Firebase Emulator
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Install pinned test dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Run static game protocol tests and Firebase Rules Emulator tests
+        run: npm test
+
+  build:
+    name: Assemble Android APK
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -30,7 +58,7 @@ jobs:
 
       - name: Build debug APK
         working-directory: android
-        run: gradle --no-daemon assembleDebug
+        run: gradle --no-daemon --stacktrace assembleDebug
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
