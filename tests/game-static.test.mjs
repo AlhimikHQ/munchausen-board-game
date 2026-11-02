@@ -36,7 +36,7 @@ test('untrusted dice requests are checked against the deterministic physics simu
   assert.ok(source.includes('function validRollRequest(request,requestId)'));
   assert.ok(source.includes('const simulated=simulateDiceState(request.launchState);'));
   assert.ok(source.includes('Math.abs(value-simulated.state[index])<=1e-5'));
-  assert.ok(source.includes('roll>=1&&roll<=6'));
+  assert.ok(source.includes('roll<1||roll>6'));
 });
 
 test('reconnect, gap recovery and subscription disposal are implemented', () => {
