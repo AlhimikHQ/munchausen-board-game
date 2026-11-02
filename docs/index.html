@@ -262,6 +262,7 @@ function ensureAuth(){
  return authPromise;
 }
 const authReady=ensureAuth();
+authReady.then(ok=>{if(ok)restoreRoomSession().catch(e=>{console.warn('room session restore',e);roomStatus('Не удалось восстановить прошлую комнату: '+netErr(e));})});
 function randomDie(){
  if(window.crypto&&crypto.getRandomValues){const a=new Uint32Array(1);do crypto.getRandomValues(a);while(a[0]>=4294967292);return a[0]%6+1}
  return 1+Math.floor(Math.random()*6);
@@ -286,6 +287,31 @@ function activePlayerIndex(){return mode==='draw'?(dl&&dl[di]!=null?dl[di]:null)
 function isMyTurn(){
  if(!netMode||!started||!memberList.length||!fbUser)return false;
  const active=activePlayerIndex();return active!=null&&memberList[active]&&memberList[active].uid===fbUser.uid;
+}
+function persistRoomSession(){
+ try{if(netMode&&roomCode&&fbUser)localStorage.setItem('munchausen.roomSession',JSON.stringify({code:roomCode,uid:fbUser.uid}));}catch(e){console.warn('room session storage',e)}
+}
+function clearRoomSession(){try{localStorage.removeItem('munchausen.roomSession')}catch(e){}}
+async function restoreRoomSession(){
+ if(netMode||!fbUser)return;
+ let saved=null;try{saved=JSON.parse(localStorage.getItem('munchausen.roomSession')||'null')}catch(e){clearRoomSession()}
+ if(!saved||saved.uid!==fbUser.uid||!/^([1-6]{3})$/.test(saved.code||'')){clearRoomSession();return;}
+ const ref=firebase.database().ref('rooms/'+saved.code),uid=fbUser.uid;
+ try{
+  const memberSnap=await withTimeout(ref.child('members/'+uid).once('value'),8000,'Нет ответа при восстановлении комнаты');
+  if(!memberSnap.exists()){clearRoomSession();return;}
+  const [settingsSnap,hostSnap,stateSnap]=await Promise.all([ref.child('settings').once('value'),ref.child('hostUid').once('value'),ref.child('state').once('value')]);
+  const state=stateSnap.val()||{};if(state.status==='closed'){clearRoomSession();return;}
+  roomCode=saved.code;roomRef=ref;netMode=true;isHost=hostSnap.val()===uid;hostUidCurrent=hostSnap.val()||'';
+  const settings=settingsSnap.val()||{};roomMaxPlayers=Math.max(2,Math.min(5,Number(settings.playerCount)||3));np=roomMaxPlayers;myIndex=Number(memberSnap.val().seat)||0;
+  roomSeq=Number(state.seq)||0;lastEvent=roomSeq;persistRoomSession();
+  $('#net').hidden=false;$('#roomCreate').hidden=!isHost;$('#netJoinToggle').hidden=true;$('#roomJoinDice').hidden=true;$('#roomCodeDisplay').hidden=false;$('#joinSlot').hidden=false;showRoomCode(roomCode);
+  $('#roomCreate').disabled=true;$('#pm').disabled=true;$('#pp').disabled=true;$('#roomJoinConfirm').disabled=true;$('#pn').textContent=np;
+  const onlineRef=ref.child('members/'+uid+'/online'),offlineRef=ref.child('members/'+uid+'/offlineAt');
+  await Promise.all([onlineRef.onDisconnect().set(false),offlineRef.onDisconnect().set(firebase.database.ServerValue.TIMESTAMP)]);
+  await onlineRef.set(true);await offlineRef.remove();
+  watchMembers();watchRoomState();roomStatus(state.status==='started'?'Подключение к текущей партии восстановлено.':'Подключение к комнате восстановлено.');
+ }catch(e){console.warn('restoreRoomSession',e);roomStatus('Не удалось восстановить комнату: '+netErr(e));}
 }
 function updateLobbyControls(){
  if(!netMode||started)return;
@@ -449,7 +475,7 @@ async function createRoom(){
    if(tx.committed)created=candidate;
   }
   if(!created)throw new Error('Свободный код комнаты не найден. Попробуйте ещё раз.');
-  roomCode=code;roomRef=created;isHost=true;netMode=true;roomSeq=0;lastEvent=0;myIndex=0;
+  roomCode=code;roomRef=created;isHost=true;netMode=true;roomSeq=0;lastEvent=0;myIndex=0;persistRoomSession();
   const onlineRef=roomRef.child('members/'+fbUser.uid+'/online'),offlineRef=roomRef.child('members/'+fbUser.uid+'/offlineAt');
   await Promise.all([onlineRef.onDisconnect().set(false),offlineRef.onDisconnect().set(firebase.database.ServerValue.TIMESTAMP)]);
   await onlineRef.set(true);await offlineRef.remove();
@@ -496,7 +522,7 @@ async function joinRoom(){
   const settings=settingsSnap.val()||{};
   roomMaxPlayers=Math.max(2,Math.min(5,Number(settings.playerCount)||5));
   await requestRef.onDisconnect().cancel();
-  roomCode=code;roomRef=ref;netMode=true;isHost=false;roomSeq=0;lastEvent=0;myIndex=Number(member.seat)||0;
+  roomCode=code;roomRef=ref;netMode=true;isHost=false;roomSeq=0;lastEvent=0;myIndex=Number(member.seat)||0;persistRoomSession();
   np=roomMaxPlayers;$('#pn').textContent=np;
   const onlineRef=ref.child('members/'+uid+'/online'),offlineRef=ref.child('members/'+uid+'/offlineAt');
   await Promise.all([onlineRef.onDisconnect().set(false),offlineRef.onDisconnect().set(firebase.database.ServerValue.TIMESTAMP)]);
@@ -682,7 +708,7 @@ function leaveNetworkSetup(){
  $('#roomCreate').hidden=false;$('#netJoinToggle').hidden=false;$('#roomJoinDice').hidden=true;$('#roomCodeDisplay').hidden=true;$('#joinSlot').hidden=false;
  $('#pm').disabled=false;$('#pp').disabled=false;$('#roomCreate').disabled=false;$('#roomJoinConfirm').disabled=false;
  $('#go').disabled=false;$('#go').textContent='▶';$('#go').classList.remove('lobby-ready');$('#go').style.background='';
- $('#roomRequests').hidden=true;roomStatus('');
+ $('#roomRequests').hidden=true;roomStatus('');clearRoomSession();
  joinDiceValues=[1,1,1];renderJoinDice();
  if(ref){
   ref.child('members').off();ref.child('settings').off();ref.child('state').off();ref.child('requests').off();ref.child('joinRequests').off();ref.child('hostUid').off();
