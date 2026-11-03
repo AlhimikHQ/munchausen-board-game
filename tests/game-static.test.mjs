@@ -71,6 +71,7 @@ test('network dice replay and pawn movement run concurrently after the initial d
   assert.ok(source.includes('roomAnimationPending=true;'));
   assert.ok(source.includes('roomAnimationPending=false;'));
   assert.ok(source.includes('function awaitingOrDraw(){return awaiting()&&!roomProcessing&&!roomAnimationPending;}'));
+  assert.ok(source.includes('const awaiting=()=>started&&!busy&&!over&&!roomAnimationPending&&!P.some(p=>p.anim);'));
 });
 
 test('the turn pipeline locks a turn and commits event, snapshot and sequence atomically', () => {
