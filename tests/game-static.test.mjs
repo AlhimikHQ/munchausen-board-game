@@ -62,6 +62,18 @@ test('multiplayer transactions touch only the small state node and retry an empt
   assert.ok(!source.includes('roomTransaction('));
 });
 
+test('network dice replay and pawn movement run concurrently after the initial draw', () => {
+  assert.ok(source.includes('async function playNetTurn(event)'));
+  assert.ok(source.includes("if(mode==='draw'){"));
+  assert.ok(source.includes('await Promise.all([replayNetDice(event),play(Number(event.roll))])'));
+  assert.ok(source.includes('await playNetTurn({by:request.uid'));
+  assert.ok(source.includes('await playNetTurn(event)'));
+  assert.ok(source.includes('roomAnimationPending=true;'));
+  assert.ok(source.includes('roomAnimationPending=false;'));
+  assert.ok(source.includes('function awaitingOrDraw(){return awaiting()&&!roomProcessing&&!roomAnimationPending;}'));
+  assert.ok(source.includes('const awaiting=()=>started&&!busy&&!over&&!roomAnimationPending&&!P.some(p=>p.anim);'));
+});
+
 test('the turn pipeline locks a turn and commits event, snapshot and sequence atomically', () => {
   assert.ok(source.includes('function processRollRequest(request,requestId)'));
   assert.ok(source.includes('state.turnToken!==request.turnToken'));

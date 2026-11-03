@@ -180,13 +180,13 @@ fl.connect(g);g.connect(OUT);[...os,lf].forEach(x=>{x.start(t);x.stop(t+dur+.05)
 function failSnd(){if(!AC)return;const L=LV.fail;[[311,0,.22],[294,.26,.22],[277,.52,.22],[262,.78,1.0]].forEach((a,k)=>mute(a[0],a[1],a[2],.36*L,k==3))}
 addEventListener('pointerdown',audioInit);
 
-const awaiting=()=>started&&!busy&&!over&&!P.some(p=>p.anim);
+const awaiting=()=>started&&!busy&&!over&&!roomAnimationPending&&!P.some(p=>p.anim);
 /* Firebase multiplayer: host validates turns and publishes authoritative dice results. */
 const firebaseConfig={apiKey:"AIzaSyClRq2KotMI-ajRV_pWGG2t1eqRYKy6Q_I",authDomain:"board-games-n1.firebaseapp.com",databaseURL:"https://board-games-n1-default-rtdb.europe-west1.firebasedatabase.app",projectId:"board-games-n1",storageBucket:"board-games-n1.firebasestorage.app",messagingSenderId:"797191791563",appId:"1:797191791563:web:4f1c5ce0acaf15ceb24c4e"};
 const FIREBASE_SCHEMA=3,ROOM_EVENT_LIMIT=64,ROOM_STALE_MEMBER_MS=15*60*1000,ROOM_STORAGE_KEY='munchausen.room.v3';
 const NETWORK_DEFAULT_COLORS=['#e02020','#1e5bff','#1faa3c','#ffe94d','#fff'];
 let netMode=false,fbUser=null,roomRef=null,roomCode='',isHost=false,myIndex=-1,mySeat=-1,memberList=[],networkPlayers=[],roomMeta=null;
-let roomTurnToken='',roomExpectedUid='',roomProcessing=false,lastEvent=0,roomSeq=0,roomMaxPlayers=3,roomStarting=false,roomStartPending=false;
+let roomTurnToken='',roomExpectedUid='',roomProcessing=false,roomAnimationPending=false,lastEvent=0,roomSeq=0,roomMaxPlayers=3,roomStarting=false,roomStartPending=false;
 let requestQueue=Promise.resolve(),eventQueue=Promise.resolve(),pendingNetEvents=Object.create(null);
 let authError='',authPromise=null,authStateUnsub=null,connectionRef=null,connectionState=null,roomListeners=[];
 let remoteDiceResolve=null,remoteDiceTimer=0,roomCreatePending=false,roomJoinPending=false,netUiEpoch=0,presenceHeartbeatTimer=0,staleLockRecoveryTimer=0,snapshotRecoveryTimer=0;
@@ -406,7 +406,7 @@ function watchRoomState(){
   requestQueue=requestQueue.then(()=>processRollRequest(request,snap.key)).catch(e=>console.warn('Firebase request queue:',netErr(e),e));
  });
 }
-function awaitingOrDraw(){return awaiting()&&!roomProcessing;}
+function awaitingOrDraw(){return awaiting()&&!roomProcessing&&!roomAnimationPending;}
 async function maybeStartNetworkGame(){
  if(!isHost||started||roomStarting||roomStartPending||!roomRef||!roomMeta||roomMeta.status!=='lobby')return;
  roomStartPending=true;
@@ -487,9 +487,23 @@ function replayNetDice(event){
   remoteDiceTimer=setTimeout(finish,8000);requestAnimationFrame(dieLoop);
  });
 }
+async function playNetTurn(event){
+ if(mode==='draw'){
+  await replayNetDice(event);
+  await play(Number(event.roll));
+  return;
+ }
+ await Promise.all([replayNetDice(event),play(Number(event.roll))]);
+}
 async function runNetEvent(event){
  if(!event||event.type!=='roll'||!Number.isInteger(Number(event.roll)))return;
- await replayNetDice(event);await play(Number(event.roll));if(event.snapshot)applyNetSnapshot(event.snapshot);
+ roomAnimationPending=true;
+ try{
+  await playNetTurn(event);
+  if(event.snapshot)applyNetSnapshot(event.snapshot);
+ }finally{
+  roomAnimationPending=false;
+ }
  roomSeq=Number(event.seq)||roomSeq;roomTurnToken=event.turnToken||roomTurnToken;roomExpectedUid=event.activeUid||roomExpectedUid;
 }
 async function recoverRoomSnapshot(){
@@ -568,9 +582,7 @@ async function processRollRequest(request,requestId){
    return;
   }
   roomProcessing=true;beforeSnapshot=makeNetSnapshot();beforeDice=Array.from(S);
-  if(request.uid!==fbUser.uid)await replayNetDice({by:request.uid,roll:request.roll,launchState:request.launchState,diceState:request.diceState});
-  else{S.set(request.diceState);draw();}
-  await play(Number(request.roll));
+  await playNetTurn({by:request.uid,roll:Number(request.roll),launchState:request.launchState,diceState:request.diceState});
   if(!lockedState||!lockedState.processing||lockedState.processing.requestId!==requestId||lockedState.processing.turnToken!==request.turnToken)throw new Error('Turn lock lost before commit');
   const seq=(Number(lockedState.seq)||0)+1,snapshot=makeNetSnapshot();snapshot.seq=seq;
   const nextIndex=activePlayerIndex(snapshot),activeUid=networkPlayers[nextIndex]&&networkPlayers[nextIndex].uid||'',turnToken=makeTurnToken(seq,activeUid),now=Date.now();
