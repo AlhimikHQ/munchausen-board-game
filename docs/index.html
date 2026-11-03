@@ -487,9 +487,23 @@ function replayNetDice(event){
   remoteDiceTimer=setTimeout(finish,8000);requestAnimationFrame(dieLoop);
  });
 }
+async function playNetTurn(event){
+ if(mode==='draw'){
+  await replayNetDice(event);
+  await play(Number(event.roll));
+  return;
+ }
+ await Promise.all([replayNetDice(event),play(Number(event.roll))]);
+}
 async function runNetEvent(event){
  if(!event||event.type!=='roll'||!Number.isInteger(Number(event.roll)))return;
- await replayNetDice(event);await play(Number(event.roll));if(event.snapshot)applyNetSnapshot(event.snapshot);
+ roomProcessing=true;
+ try{
+  await playNetTurn(event);
+  if(event.snapshot)applyNetSnapshot(event.snapshot);
+ }finally{
+  roomProcessing=false;
+ }
  roomSeq=Number(event.seq)||roomSeq;roomTurnToken=event.turnToken||roomTurnToken;roomExpectedUid=event.activeUid||roomExpectedUid;
 }
 async function recoverRoomSnapshot(){
@@ -568,9 +582,7 @@ async function processRollRequest(request,requestId){
    return;
   }
   roomProcessing=true;beforeSnapshot=makeNetSnapshot();beforeDice=Array.from(S);
-  if(request.uid!==fbUser.uid)await replayNetDice({by:request.uid,roll:request.roll,launchState:request.launchState,diceState:request.diceState});
-  else{S.set(request.diceState);draw();}
-  await play(Number(request.roll));
+  await playNetTurn({by:request.uid,roll:Number(request.roll),launchState:request.launchState,diceState:request.diceState});
   if(!lockedState||!lockedState.processing||lockedState.processing.requestId!==requestId||lockedState.processing.turnToken!==request.turnToken)throw new Error('Turn lock lost before commit');
   const seq=(Number(lockedState.seq)||0)+1,snapshot=makeNetSnapshot();snapshot.seq=seq;
   const nextIndex=activePlayerIndex(snapshot),activeUid=networkPlayers[nextIndex]&&networkPlayers[nextIndex].uid||'',turnToken=makeTurnToken(seq,activeUid),now=Date.now();
