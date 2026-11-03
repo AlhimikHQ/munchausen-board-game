@@ -186,7 +186,7 @@ const firebaseConfig={apiKey:"AIzaSyClRq2KotMI-ajRV_pWGG2t1eqRYKy6Q_I",authDomai
 const FIREBASE_SCHEMA=3,ROOM_EVENT_LIMIT=64,ROOM_STALE_MEMBER_MS=15*60*1000,ROOM_STORAGE_KEY='munchausen.room.v3';
 const NETWORK_DEFAULT_COLORS=['#e02020','#1e5bff','#1faa3c','#ffe94d','#fff'];
 let netMode=false,fbUser=null,roomRef=null,roomCode='',isHost=false,myIndex=-1,mySeat=-1,memberList=[],networkPlayers=[],roomMeta=null;
-let roomTurnToken='',roomExpectedUid='',roomProcessing=false,lastEvent=0,roomSeq=0,roomMaxPlayers=3,roomStarting=false,roomStartPending=false;
+let roomTurnToken='',roomExpectedUid='',roomProcessing=false,roomAnimationPending=false,lastEvent=0,roomSeq=0,roomMaxPlayers=3,roomStarting=false,roomStartPending=false;
 let requestQueue=Promise.resolve(),eventQueue=Promise.resolve(),pendingNetEvents=Object.create(null);
 let authError='',authPromise=null,authStateUnsub=null,connectionRef=null,connectionState=null,roomListeners=[];
 let remoteDiceResolve=null,remoteDiceTimer=0,roomCreatePending=false,roomJoinPending=false,netUiEpoch=0,presenceHeartbeatTimer=0,staleLockRecoveryTimer=0,snapshotRecoveryTimer=0;
@@ -406,7 +406,7 @@ function watchRoomState(){
   requestQueue=requestQueue.then(()=>processRollRequest(request,snap.key)).catch(e=>console.warn('Firebase request queue:',netErr(e),e));
  });
 }
-function awaitingOrDraw(){return awaiting()&&!roomProcessing;}
+function awaitingOrDraw(){return awaiting()&&!roomProcessing&&!roomAnimationPending;}
 async function maybeStartNetworkGame(){
  if(!isHost||started||roomStarting||roomStartPending||!roomRef||!roomMeta||roomMeta.status!=='lobby')return;
  roomStartPending=true;
@@ -497,12 +497,12 @@ async function playNetTurn(event){
 }
 async function runNetEvent(event){
  if(!event||event.type!=='roll'||!Number.isInteger(Number(event.roll)))return;
- roomProcessing=true;
+ roomAnimationPending=true;
  try{
   await playNetTurn(event);
   if(event.snapshot)applyNetSnapshot(event.snapshot);
  }finally{
-  roomProcessing=false;
+  roomAnimationPending=false;
  }
  roomSeq=Number(event.seq)||roomSeq;roomTurnToken=event.turnToken||roomTurnToken;roomExpectedUid=event.activeUid||roomExpectedUid;
 }
