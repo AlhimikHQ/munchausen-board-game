@@ -68,7 +68,9 @@ test('network dice replay and pawn movement run concurrently after the initial d
   assert.ok(source.includes('await Promise.all([replayNetDice(event),play(Number(event.roll))])'));
   assert.ok(source.includes('await playNetTurn({by:request.uid'));
   assert.ok(source.includes('await playNetTurn(event)'));
-  assert.ok(source.includes('roomProcessing=true;'));
+  assert.ok(source.includes('roomAnimationPending=true;'));
+  assert.ok(source.includes('roomAnimationPending=false;'));
+  assert.ok(source.includes('function awaitingOrDraw(){return awaiting()&&!roomProcessing&&!roomAnimationPending;}'));
 });
 
 test('the turn pipeline locks a turn and commits event, snapshot and sequence atomically', () => {
