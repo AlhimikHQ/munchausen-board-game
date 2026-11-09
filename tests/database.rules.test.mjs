@@ -114,6 +114,41 @@ test('only the host can delete a room, which is what auto-delete on host exit re
   });
 });
 
+test('the host can close a vacant seat and nobody can sit on it afterwards', async () => {
+  const lobby = fixture('lobby');
+  delete lobby.slots[1];
+  delete lobby.members['player-1'];
+  delete lobby.members['player-2'];
+  await seedRoom(roomPath, lobby);
+  const now = 1700000000003;
+
+  const hostDb = env.authenticatedContext('host-1').database();
+  await assertSucceeds(set(ref(hostDb, roomPath + '/slots/2'), { uid: 'closed', seat: 2, joinedAt: now }));
+  await assertSucceeds(set(ref(hostDb, roomPath + '/settings/closed/2'), true));
+
+  const guestDb = env.authenticatedContext('guest-new').database();
+  await assertFails(set(ref(guestDb, roomPath + '/slots/2'), { uid: 'guest-new', seat: 2, joinedAt: now }));
+  await assertFails(set(ref(guestDb, roomPath + '/settings/closed/2'), null));
+});
+
+test('only the host can remove a player from the lobby', async () => {
+  const lobby = fixture('lobby');
+  delete lobby.slots[2];
+  delete lobby.members['player-2'];
+  await seedRoom(roomPath, lobby);
+
+  await assertFails(update(ref(memberDb('player-1'), roomPath), { 'members/host-1': null, 'slots/0': null }));
+  await assertFails(update(ref(env.authenticatedContext('intruder').database(), roomPath), { 'members/player-1': null, 'slots/1': null }));
+  await assertSucceeds(update(ref(env.authenticatedContext('host-1').database(), roomPath), { 'members/player-1': null, 'slots/1': null }));
+
+  await env.withSecurityRulesDisabled(async context => {
+    const members = await get(ref(context.database(), roomPath + '/members'));
+    assert.equal(members.val()['player-1'], undefined);
+    const slot = await get(ref(context.database(), roomPath + '/slots/1'));
+    assert.equal(slot.exists(), false);
+  });
+});
+
 test('a user can inspect only their own membership node before joining', async () => {
   const db = env.authenticatedContext('new-player').database();
   await assertSucceeds(get(ref(db, roomPath + '/members/new-player')));

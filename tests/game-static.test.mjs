@@ -155,16 +155,30 @@ test('the room is deleted automatically when its creator leaves', () => {
   assert.ok(source.includes('if(removed){try{await ref.onDisconnect().cancel();}catch(e){}}'));
 });
 
-test('a game can start with fewer players than the room capacity once at least two are present and ready', () => {
-  assert.ok(source.includes('const full=memberList.length>=2&&memberList.length<=roomMaxPlayers&&memberList.every(m=>m.connected!==false)'));
-  assert.ok(source.includes('members.length<2||members.length>count'));
-  assert.ok(source.includes('memberList.length<2||memberList.length>roomMaxPlayers'));
-  assert.ok(!source.includes('members.length!==count'));
-  assert.ok(!source.includes('memberList.length!==roomMaxPlayers'));
+test('the lobby shows the same player count to everyone and starts the draw by itself when the open seats are full', () => {
+  assert.ok(source.includes('function openSeatList()'));
+  assert.ok(source.includes("np=open.length;$('#pn').textContent=np;"));
+  assert.ok(source.includes("roomClosed=new Set(Object.keys(settings.closed||{})"));
+  assert.ok(source.includes('if(open.length<2||members.length!==open.length||!members.every(m=>open.includes(Number(m.seat))&&m.connected!==false))return;'));
+  assert.ok(source.includes('color:seatColor(Number(m.seat))'));
+  assert.ok(source.includes("function refreshSw(){if(netMode&&!started){renderLobbySeats();return;}"));
+  assert.ok(!source.includes("members/'+fbUser.uid+'/ready'"));
+});
+
+test('the host can remove a player, close a vacant seat and reopen it; the removed player is told', () => {
+  assert.ok(source.includes("await roomRef.update({['members/'+m.uid]:null,['slots/'+m.seat]:null});"));
+  assert.ok(source.includes("{uid:'closed',seat,joinedAt:Date.now()}"));
+  assert.ok(source.includes("await roomRef.child('settings/closed/'+seat).set(true);"));
+  assert.ok(source.includes("await roomRef.child('settings/closed/'+seat).remove();"));
+  assert.ok(source.includes('В игре должно остаться минимум два игрока.'));
+  assert.ok(source.includes('if(netMode&&!started&&!isHost&&myIndex<0){roomKicked();return;}'));
+  assert.ok(source.includes('Создатель убрал вас из комнаты.'));
+  assert.ok(source.includes("k.className='kick'"));
+  assert.ok(source.includes('if(isHost&&!mine){'));
 });
 
 test('critical network handlers are declared only once', () => {
-  for (const name of ['ensureAuth','createRoom','joinRoom','watchRoomState','processRollRequest','makeNetSnapshot','applyNetSnapshot','leaveNetworkSetup','armRoomDisconnect','roomClosedByHost']) {
+  for (const name of ['ensureAuth','createRoom','joinRoom','watchRoomState','processRollRequest','makeNetSnapshot','applyNetSnapshot','leaveNetworkSetup','armRoomDisconnect','roomClosedByHost','openSeatList','renderLobbySeats','updateLobbyControls','kickPlayer','closeSeat','reopenSeat','roomKicked']) {
     assert.equal(source.split('function ' + name + '(').length - 1, 1, name + ' should be declared once');
   }
 });
