@@ -1,10 +1,13 @@
 'use strict';
 
-const HOUR_MS = 60 * 60 * 1000;
+const MINUTE_MS = 60 * 1000;
+const HOUR_MS = 60 * MINUTE_MS;
 const DAY_MS = 24 * HOUR_MS;
 const CLOSED_ROOM_GRACE_MS = HOUR_MS;
-const DISCONNECTED_HOST_TTL_MS = DAY_MS;
-const IDLE_ROOM_TTL_MS = 7 * DAY_MS;
+/* Комната удаляется на клиенте через onDisconnect().remove(), как только создатель вышел.
+   Ниже — страховка на случай, если обработчик не успел зарегистрироваться или сервер его не выполнил. */
+const DISCONNECTED_HOST_TTL_MS = 5 * MINUTE_MS;
+const IDLE_ROOM_TTL_MS = 30 * MINUTE_MS;
 
 function timestamp(value) {
   const parsed = Number(value);
@@ -42,6 +45,7 @@ function shouldDeleteRoom(room, now = Date.now()) {
 }
 
 module.exports = {
+  MINUTE_MS,
   HOUR_MS,
   DAY_MS,
   CLOSED_ROOM_GRACE_MS,

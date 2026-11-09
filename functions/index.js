@@ -13,7 +13,7 @@ if (getApps().length === 0) {
 }
 
 exports.cleanupAbandonedRooms = onSchedule({
-  schedule: 'every 60 minutes',
+  schedule: 'every 15 minutes',
   timeZone: 'Etc/UTC',
   region: 'europe-west1',
   maxInstances: 1,

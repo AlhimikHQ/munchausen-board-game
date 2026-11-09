@@ -53,6 +53,34 @@ test('room codes contain exactly three dice', () => {
   assert.ok(source.includes("function roomCodeValid(code){return typeof code==='string'&&/^[1-6]{3}$/.test(code);}"));
 });
 
+test('default player colours are six-digit hex values accepted by the database rules', () => {
+  const hex = /^#[0-9a-f]{6}$/i;
+  for (const name of ['const COL=', 'const NETWORK_DEFAULT_COLORS=']) {
+    const start = source.indexOf(name);
+    assert.ok(start >= 0, name + ' must exist');
+    const list = source.slice(start, source.indexOf(']', start) + 1);
+    const colours = [...list.matchAll(/'(#[0-9a-fA-F]+)'/g)].map(match => match[1]);
+    assert.equal(colours.length, 5, name + ' must list five colours');
+    for (const colour of colours) assert.match(colour, hex, name + ' contains an invalid colour ' + colour);
+  }
+});
+
+test('room creation does not hide a rules rejection behind a retry loop', () => {
+  assert.ok(source.includes("if(netErr(e)!=='permission-denied')throw e;"));
+  assert.ok(source.includes('if(!taken.exists())throw e;'));
+  assert.ok(source.includes("throw new Error('Нет свободных кодов комнат. Попробуйте позже.')"));
+});
+
+test('joining a room explains every refusal instead of failing silently', () => {
+  for (const text of [
+    'Комната с таким кодом не найдена',
+    'Комната создана другой версией игры',
+    'Игра в этой комнате уже началась.',
+    'В комнате нет свободных мест.'
+  ]) assert.ok(source.includes(text), text);
+  assert.ok(source.includes('const refuse=message=>showRoomToast(message,5500);'));
+});
+
 test('multiplayer transactions touch only the small state node and retry an empty local cache', () => {
   assert.ok(source.includes('function stateTransaction(updateFn)'));
   assert.ok(source.includes('state=>state===null?null:updateFn(state)'));
@@ -84,11 +112,17 @@ test('the turn pipeline locks a turn and commits event, snapshot and sequence at
   assert.ok(source.includes("await roomRef.update(updates)"));
 });
 
-test('untrusted dice requests are checked against the deterministic physics simulation', () => {
+test('a roll from a reconnected player is not dropped because of a stale presence flag', () => {
+  assert.ok(source.includes('if(!actor){'));
+  assert.ok(!source.includes('actor.connected===false'));
+});
+
+test('untrusted dice requests are checked, but a physics mismatch between JS engines does not silently drop the turn', () => {
   assert.ok(source.includes('function validRollRequest(request,requestId)'));
   assert.ok(source.includes('const simulated=simulateDiceState(request.launchState);'));
   assert.ok(source.includes('Math.abs(value-simulated.state[index])<=1e-5'));
   assert.ok(source.includes('roll<1||roll>6'));
+  assert.ok(source.includes('принят по заявленному результату'));
 });
 
 test('reconnect, gap recovery and subscription disposal are implemented', () => {
@@ -99,13 +133,30 @@ test('reconnect, gap recovery and subscription disposal are implemented', () => 
   assert.ok(source.includes('function scheduleSnapshotRecovery()'));
   assert.ok(source.includes('function stopRoomListeners()'));
   assert.ok(source.includes('function startPresenceHeartbeat()'));
-  assert.ok(source.includes("hostPresence.onDisconnect().update({connected:false,ready:false,lastSeenAt:firebase.database.ServerValue.TIMESTAMP})"));
-  assert.ok(!source.includes('roomRef.onDisconnect().remove()'));
-  assert.ok(!source.includes('ref.onDisconnect().remove()'));
+  assert.ok(source.includes("onDisconnect().update({connected:false,ready:false,lastSeenAt:firebase.database.ServerValue.TIMESTAMP})"));
+});
+
+test('the room is deleted automatically when its creator leaves', () => {
+  // the host registers a server-side removal of the whole room right after creating it
+  assert.ok(source.includes('async function armRoomDisconnect(ref,uid,host)'));
+  assert.ok(source.includes('if(host){await ref.onDisconnect().remove();return;}'));
+  assert.ok(source.includes('await armRoomDisconnect(roomRef,fbUser.uid,true);'));
+  // and re-registers it after a reconnect or a restored session
+  assert.ok(source.includes('await armRoomDisconnect(ref,uid,host);'));
+  assert.ok(source.includes('await armRoomDisconnect(ref,fbUser.uid,meta.hostUid===fbUser.uid);'));
+  // guests and a returning host react to the room disappearing
+  assert.ok(source.includes('function roomClosedByHost()'));
+  assert.ok(source.includes('if(!roomMeta){roomClosedByHost();return;}'));
+  assert.ok(source.includes('if(!state){roomClosedByHost();return;}'));
+  assert.ok(source.includes('Создатель вышел — комната закрыта.'));
+  // closing the page deletes the room immediately, a manual exit removes it first and only then cancels the handler
+  assert.ok(source.includes("addEventListener('pagehide'"));
+  assert.ok(source.includes('try{await ref.remove();removed=true;}'));
+  assert.ok(source.includes('if(removed){try{await ref.onDisconnect().cancel();}catch(e){}}'));
 });
 
 test('critical network handlers are declared only once', () => {
-  for (const name of ['ensureAuth','createRoom','joinRoom','watchRoomState','processRollRequest','makeNetSnapshot','applyNetSnapshot','leaveNetworkSetup']) {
+  for (const name of ['ensureAuth','createRoom','joinRoom','watchRoomState','processRollRequest','makeNetSnapshot','applyNetSnapshot','leaveNetworkSetup','armRoomDisconnect','roomClosedByHost']) {
     assert.equal(source.split('function ' + name + '(').length - 1, 1, name + ' should be declared once');
   }
 });

@@ -16,15 +16,15 @@ function room(overrides = {}) {
       schema: 3,
       hostUid: 'host-uid',
       status: 'lobby',
-      createdAt: NOW - 60_000,
-      updatedAt: NOW - 60_000,
+      createdAt: NOW - 20_000,
+      updatedAt: NOW - 20_000,
       ...overrides.meta
     },
     members: {
       'host-uid': {
         name: 'Host',
         connected: true,
-        lastSeenAt: NOW - 60_000,
+        lastSeenAt: NOW - 20_000,
         ...overrides.host
       }
     }
@@ -35,14 +35,16 @@ test('a connected room with a recent host heartbeat is retained', () => {
   assert.equal(shouldDeleteRoom(room(), NOW), false);
 });
 
-test('a recently disconnected host receives the reconnect grace period', () => {
-  const value = room({ host: { connected: false, lastSeenAt: NOW - DISCONNECTED_HOST_TTL_MS + 1 } });
-  assert.equal(shouldDeleteRoom(value, NOW), false);
+test('a room whose host is marked offline survives only a short grace period', () => {
+  const fresh = room({ host: { connected: false, lastSeenAt: NOW - DISCONNECTED_HOST_TTL_MS + 1 } });
+  assert.equal(shouldDeleteRoom(fresh, NOW), false);
+  const expired = room({ host: { connected: false, lastSeenAt: NOW - DISCONNECTED_HOST_TTL_MS } });
+  assert.equal(shouldDeleteRoom(expired, NOW), true);
 });
 
-test('a room is deleted after its host has been offline for 24 hours', () => {
-  const value = room({ host: { connected: false, lastSeenAt: NOW - DISCONNECTED_HOST_TTL_MS } });
-  assert.equal(shouldDeleteRoom(value, NOW), true);
+test('the grace period for an offline host is minutes, not days', () => {
+  assert.ok(DISCONNECTED_HOST_TTL_MS <= 10 * 60 * 1000);
+  assert.ok(IDLE_ROOM_TTL_MS <= 60 * 60 * 1000);
 });
 
 test('a room with a stale heartbeat is deleted even if the presence flag is stale', () => {

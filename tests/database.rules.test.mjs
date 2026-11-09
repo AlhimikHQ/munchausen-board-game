@@ -2,7 +2,7 @@ import test, { before, after, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { initializeTestEnvironment, assertFails, assertSucceeds } from '@firebase/rules-unit-testing';
-import { ref, get, set, update, runTransaction } from 'firebase/database';
+import { ref, get, set, update, remove, runTransaction } from 'firebase/database';
 
 const projectId = 'demo-munchausen';
 const roomPath = 'rooms/123';
@@ -83,6 +83,35 @@ test('a room can be created by its authenticated host with a valid schema', asyn
   const invalid = fixture('lobby');
   invalid.settings.playerCount = 5;
   await assertFails(set(ref(db, 'rooms/124'), invalid));
+});
+
+test('a room created exactly like the game client does it (five colours, white included) is accepted', async () => {
+  const now = 1700000000000;
+  const db = env.authenticatedContext('host-9').database();
+  const room = {
+    meta: { schema: 3, hostUid: 'host-9', status: 'lobby', maxPlayers: 5, createdAt: now, updatedAt: now },
+    slots: { 0: { uid: 'host-9', seat: 0, joinedAt: now } },
+    members: { 'host-9': { name: 'Игрок 1', ready: false, seat: 0, joinedAt: now, connected: true, lastSeenAt: now } },
+    settings: { playerCount: 5, colors: ['#e02020', '#1e5bff', '#1faa3c', '#ffe94d', '#ffffff'], updatedAt: now },
+    state: { status: 'lobby', seq: 0, activeUid: '', turnToken: '', processing: null }
+  };
+  await assertSucceeds(set(ref(db, 'rooms/125'), room));
+  // an older client that still sends the short form of white keeps working
+  room.settings.colors[4] = '#fff';
+  await assertSucceeds(set(ref(db, 'rooms/126'), room));
+  // but a value that is not a colour is still rejected
+  room.settings.colors[4] = 'white';
+  await assertFails(set(ref(db, 'rooms/136'), room));
+});
+
+test('only the host can delete a room, which is what auto-delete on host exit relies on', async () => {
+  await assertFails(remove(ref(memberDb('player-1'), roomPath)));
+  await assertFails(remove(ref(env.authenticatedContext('intruder').database(), roomPath)));
+  await assertSucceeds(remove(ref(env.authenticatedContext('host-1').database(), roomPath)));
+  await env.withSecurityRulesDisabled(async context => {
+    const snapshot = await get(ref(context.database(), roomPath));
+    assert.equal(snapshot.exists(), false);
+  });
 });
 
 test('a user can inspect only their own membership node before joining', async () => {

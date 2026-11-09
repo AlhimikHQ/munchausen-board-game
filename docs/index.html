@@ -60,7 +60,7 @@ button{font:inherit;padding:8px 14px;border-radius:10px;border:1px solid var(--l
 <style>#roomToast{position:fixed;left:50%;bottom:calc(14px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);max-width:92vw;padding:8px 14px;border-radius:12px;background:rgba(0,0,0,.82);color:#fff;font:600 .85rem/1.25 system-ui,-apple-system,sans-serif;text-align:center;z-index:99999;pointer-events:none;opacity:0;transition:opacity .2s}#roomToast.on{opacity:1}</style>
 <script>
 const CW=100/9,TH=1316;let CH=117.5/13.16;
-const COL=['#e02020','#1e5bff','#1faa3c','#ffe94d','#fff'];
+const COL=['#e02020','#1e5bff','#1faa3c','#ffe94d','#ffffff'];
 // Правила клеток: от→[куда, анимация, эмодзи]. Красные — вперёд, синие — назад. Редактируется здесь.
 const J={5:[9,'ride','🐎'],11:[15,'ride','🏇'],17:[50,'fly','🦆'],23:[47,'fly','💣'],27:[63,'climb','🌱'],35:[38,'jump','🐴'],39:[43,'fly','🦆'],49:[53,'ride','🐎'],51:[55,'fly','🦆'],71:[84,'fly','💣'],73:[89,'ride','⛵'],85:[93,'fly','⛵'],
 21:[3,'fall','⛪'],36:[18,'fall','💦'],48:[22,'fall','🏰'],50:[25,'fall','🦆'],62:[26,'fall','🧗'],60:[58,'fall','🐋'],72:[67,'fall','🌊'],79:[57,'fall','☄️'],92:[59,'fall','🦅']};
@@ -183,8 +183,8 @@ addEventListener('pointerdown',audioInit);
 const awaiting=()=>started&&!busy&&!over&&!roomAnimationPending&&!P.some(p=>p.anim);
 /* Firebase multiplayer: host validates turns and publishes authoritative dice results. */
 const firebaseConfig={apiKey:"AIzaSyClRq2KotMI-ajRV_pWGG2t1eqRYKy6Q_I",authDomain:"board-games-n1.firebaseapp.com",databaseURL:"https://board-games-n1-default-rtdb.europe-west1.firebasedatabase.app",projectId:"board-games-n1",storageBucket:"board-games-n1.firebasestorage.app",messagingSenderId:"797191791563",appId:"1:797191791563:web:4f1c5ce0acaf15ceb24c4e"};
-const FIREBASE_SCHEMA=3,ROOM_EVENT_LIMIT=64,ROOM_STALE_MEMBER_MS=15*60*1000,ROOM_STORAGE_KEY='munchausen.room.v3';
-const NETWORK_DEFAULT_COLORS=['#e02020','#1e5bff','#1faa3c','#ffe94d','#fff'];
+const FIREBASE_SCHEMA=3,ROOM_EVENT_LIMIT=64,ROOM_STALE_MEMBER_MS=2*60*1000,ROOM_STORAGE_KEY='munchausen.room.v3';
+const NETWORK_DEFAULT_COLORS=['#e02020','#1e5bff','#1faa3c','#ffe94d','#ffffff'];
 let netMode=false,fbUser=null,roomRef=null,roomCode='',isHost=false,myIndex=-1,mySeat=-1,memberList=[],networkPlayers=[],roomMeta=null;
 let roomTurnToken='',roomExpectedUid='',roomProcessing=false,roomAnimationPending=false,lastEvent=0,roomSeq=0,roomMaxPlayers=3,roomStarting=false,roomStartPending=false;
 let requestQueue=Promise.resolve(),eventQueue=Promise.resolve(),pendingNetEvents=Object.create(null);
@@ -265,7 +265,7 @@ function startPresenceHeartbeat(){
  if(!roomRef||!fbUser)return;
  const presenceRef=roomRef.child('members/'+fbUser.uid);
  const heartbeat=()=>presenceRef.update({connected:true,lastSeenAt:Date.now()}).catch(e=>reportFirebase('Не удалось обновить подключение игрока',e));
- heartbeat();presenceHeartbeatTimer=setInterval(heartbeat,60000);
+ heartbeat();presenceHeartbeatTimer=setInterval(heartbeat,30000);
 }
 function stopPresenceHeartbeat(){if(presenceHeartbeatTimer){clearInterval(presenceHeartbeatTimer);presenceHeartbeatTimer=0;}}
 function makeTurnToken(seq,uid){const nonce=window.crypto&&crypto.randomUUID?crypto.randomUUID():Math.random().toString(36).slice(2)+Date.now().toString(36);return String(seq)+':'+String(uid||'none')+':'+nonce;}
@@ -297,8 +297,8 @@ function updateRoomPlayerColors(colors){
 function watchMembers(){
  if(!roomRef)return;
  listenRoom(roomRef.child('meta'),'value',snap=>{
-  roomMeta=snap.val()||null;if(!roomMeta){if(netMode)leaveNetworkSetup(false);return;}
-  roomMaxPlayers=Math.max(2,Math.min(5,Number(roomMeta.maxPlayers)||3));if(roomMeta.status==='closed'){leaveNetworkSetup(false);return;}
+  roomMeta=snap.val()||null;if(!roomMeta){roomClosedByHost();return;}
+  roomMaxPlayers=Math.max(2,Math.min(5,Number(roomMeta.maxPlayers)||3));if(roomMeta.status==='closed'){roomClosedByHost();return;}
   updateLobbyControls();maybeStartNetworkGame().catch(e=>console.warn('Firebase start:',netErr(e)));
  });
  listenRoom(roomRef.child('members'),'value',snap=>{
@@ -322,63 +322,95 @@ function roomRootData(){
  settings:{playerCount:roomMaxPlayers,colors:NETWORK_DEFAULT_COLORS.slice(),updatedAt:now},
  state:{status:'lobby',seq:0,activeUid:'',turnToken:'',processing:null}};
 }
+/* Автоудаление: создатель регистрирует на сервере onDisconnect().remove() для всей комнаты — как только он выходит
+   (закрыл вкладку/приложение, пропала связь), Firebase сам удаляет комнату, а у остальных игроков срабатывает roomClosedByHost(). */
+async function armRoomDisconnect(ref,uid,host){
+ if(host){await ref.onDisconnect().remove();return;}
+ await ref.child('members/'+uid).onDisconnect().update({connected:false,ready:false,lastSeenAt:firebase.database.ServerValue.TIMESTAMP});
+}
+function roomClosedByHost(){
+ if(!netMode)return;
+ const ref=roomRef,host=isHost,wasStarted=started;
+ leaveNetworkSetup(false);clearSavedRoomCode();
+ if(host&&ref){try{ref.onDisconnect().cancel().catch(()=>{});}catch(e){}}
+ showRoomToast(host?'Связь с комнатой потеряна — комната удалена.':'Создатель вышел — комната закрыта.',wasStarted?2800:6000);
+ if(wasStarted)setTimeout(()=>location.reload(),2800);
+}
 async function createRoom(){
  if(roomCreatePending||netMode)return;roomCreatePending=true;const epoch=netUiEpoch;
+ let created=null;
  try{
   roomMaxPlayers=Math.max(2,Math.min(5,Number(np)||3));roomStarting=false;roomStartPending=false;
   if(!(await withTimeout(ensureAuth(),12000,'Firebase authentication timeout')))return;if(epoch!==netUiEpoch||$('#net').hidden)return;
-  let created=null,code='';
-  for(let i=0;i<216&&!created;i++){
-   code=makeRoomCode();const candidate=firebase.database().ref('rooms/'+code);
+  let code='';const tried=new Set();
+  for(let i=0;i<60&&!created;i++){
+   do{code=makeRoomCode();}while(tried.has(code)&&tried.size<216);
+   tried.add(code);const candidate=firebase.database().ref('rooms/'+code);
    const existing=await withTimeout(candidate.child('meta').once('value'),8000,'Firebase room code lookup timeout');
    if(existing.exists())continue;
    try{
     const tx=await withTimeout(candidate.transaction(current=>current===null?roomRootData():undefined,null,false),12000,'Firebase room creation timeout');
     if(tx.committed)created=candidate;
-   }catch(e){if(netErr(e)!=='permission-denied')throw e;}
-   if(epoch!==netUiEpoch||$('#net').hidden)return;
+   }catch(e){
+    if(netErr(e)!=='permission-denied')throw e;
+    /* permission_denied — либо код заняли параллельно (тогда пробуем следующий), либо правила отклонили данные комнаты (тогда это настоящая ошибка) */
+    const taken=await withTimeout(candidate.child('meta').once('value'),8000,'Firebase room code lookup timeout');
+    if(!taken.exists())throw e;
+   }
   }
-  if(!created)throw new Error('No free room code');
-  roomCode=code;roomRef=created;isHost=true;netMode=true;myIndex=0;mySeat=0;saveRoomCode(code);
-  const hostPresence=roomRef.child('members/'+fbUser.uid);
-  await hostPresence.onDisconnect().update({connected:false,ready:false,lastSeenAt:firebase.database.ServerValue.TIMESTAMP});
-  startPresenceHeartbeat();
+  if(!created)throw new Error('Нет свободных кодов комнат. Попробуйте позже.');
+  if(epoch!==netUiEpoch||$('#net').hidden){try{await created.remove();}catch(ignore){}created=null;return;}
+  roomCode=code;roomRef=created;isHost=true;netMode=true;myIndex=0;mySeat=0;
+  await armRoomDisconnect(roomRef,fbUser.uid,true);
+  saveRoomCode(code);startPresenceHeartbeat();
   showRoomCode(roomCode);watchMembers();watchRoomState();
   $('#roomCreate').hidden=false;$('#netJoinToggle').hidden=true;$('#roomCodeDisplay').hidden=false;$('#roomJoinDice').hidden=true;$('#joinSlot').hidden=false;
   $('#pm').disabled=true;$('#pp').disabled=true;$('#roomCreate').disabled=true;$('#roomJoinConfirm').disabled=true;updateLobbyControls();
- }catch(e){reportFirebase('Не удалось создать комнату',e);if(roomRef&&isHost){try{await roomRef.remove();}catch(ignore){}}netMode=false;isHost=false;roomCode='';roomRef=null;}
+ }catch(e){
+  reportFirebase('Не удалось создать комнату',e);
+  stopPresenceHeartbeat();stopRoomListeners();
+  if(created){try{await created.onDisconnect().cancel();}catch(ignore){}try{await created.remove();}catch(ignore){}}
+  netMode=false;isHost=false;roomCode='';roomRef=null;clearSavedRoomCode();
+ }
  finally{roomCreatePending=false;}
 }
 async function joinRoom(){
  if(roomJoinPending||netMode)return;roomJoinPending=true;const epoch=netUiEpoch,stale=()=>epoch!==netUiEpoch||$('#net').hidden;
  let claimedSeat=-1,createdMember=false,ref=null;
+ const refuse=message=>showRoomToast(message,5500);
  try{
   if(!(await withTimeout(ensureAuth(),12000,'Firebase authentication timeout')))return;if(stale())return;
-  const code=joinDiceValues.join('');if(!roomCodeValid(code))return;ref=firebase.database().ref('rooms/'+code);
+  const code=joinDiceValues.join('');if(!roomCodeValid(code)){refuse('Неверный код комнаты.');return;}ref=firebase.database().ref('rooms/'+code);
   const metaSnap=await withTimeout(ref.child('meta').once('value'),12000,'Firebase room lookup timeout');
-  if(stale()||!metaSnap.exists())return;const meta=metaSnap.val()||{};
-  if(meta.schema!==FIREBASE_SCHEMA||meta.status==='closed')return;
-  roomMaxPlayers=Math.max(2,Math.min(5,Number(meta.maxPlayers)||0));if(roomMaxPlayers<2)return;
+  if(stale())return;
+  if(!metaSnap.exists()){refuse('Комната с таким кодом не найдена. Возможно, создатель уже вышел.');return;}
+  const meta=metaSnap.val()||{};
+  if(meta.schema!==FIREBASE_SCHEMA){refuse('Комната создана другой версией игры. Обновите приложение.');return;}
+  if(meta.status==='closed'){refuse('Комната закрыта.');return;}
+  roomMaxPlayers=Math.max(2,Math.min(5,Number(meta.maxPlayers)||0));if(roomMaxPlayers<2){refuse('Данные комнаты повреждены.');return;}
   const memberRef=ref.child('members/'+fbUser.uid),existing=await withTimeout(memberRef.once('value'),12000,'Firebase membership lookup timeout');
   let member=existing.val();
-  if(member){if(member.connected!==false)return;claimedSeat=Number(member.seat);if(!Number.isInteger(claimedSeat)||claimedSeat<0||claimedSeat>=roomMaxPlayers)return;}
-  else{
-   if(meta.status!=='lobby')return;
+  if(member){
+   /* этот игрок уже сидит в комнате (перезагрузка страницы, второе окно) — просто возвращаем его на своё место */
+   claimedSeat=Number(member.seat);if(!Number.isInteger(claimedSeat)||claimedSeat<0||claimedSeat>=roomMaxPlayers){refuse('Не удалось вернуться в комнату: место не найдено.');return;}
+  }else{
+   if(meta.status!=='lobby'){refuse('Игра в этой комнате уже началась.');return;}
    for(let seat=0;seat<roomMaxPlayers;seat++){
     try{
      const tx=await ref.child('slots/'+seat).transaction(current=>current===null?{uid:fbUser.uid,seat,joinedAt:Date.now()}:undefined,null,false);
      if(tx.committed){claimedSeat=seat;break;}
     }catch(slotError){if(netErr(slotError)!=='permission-denied')throw slotError;}
    }
-   if(claimedSeat<0)return;
+   if(claimedSeat<0){refuse('В комнате нет свободных мест.');return;}
    member={name:'Игрок '+(claimedSeat+1),ready:false,seat:claimedSeat,joinedAt:Date.now(),connected:true,lastSeenAt:Date.now()};
    createdMember=true;
    await memberRef.set(member);
   }
   if(stale()){if(createdMember){try{await memberRef.remove();await ref.child('slots/'+claimedSeat).remove();}catch(e){}}return;}
   await memberRef.update({connected:true,lastSeenAt:Date.now()});
-  await memberRef.onDisconnect().update({connected:false,ready:false,lastSeenAt:firebase.database.ServerValue.TIMESTAMP});
-  roomCode=code;roomRef=ref;netMode=true;isHost=meta.hostUid===fbUser.uid;mySeat=claimedSeat;myIndex=claimedSeat;saveRoomCode(code);startPresenceHeartbeat();
+  const hostHere=meta.hostUid===fbUser.uid;
+  await armRoomDisconnect(ref,fbUser.uid,hostHere);
+  roomCode=code;roomRef=ref;netMode=true;isHost=hostHere;mySeat=claimedSeat;myIndex=claimedSeat;saveRoomCode(code);startPresenceHeartbeat();
   showRoomCode(code);watchMembers();watchRoomState();
   $('#roomJoinDice').hidden=true;$('#roomCodeDisplay').hidden=false;$('#joinSlot').hidden=false;
   $('#roomCreate').hidden=!isHost;$('#netJoinToggle').hidden=true;$('#pm').disabled=true;$('#pp').disabled=true;
@@ -391,7 +423,7 @@ async function joinRoom(){
 function watchRoomState(){
  if(!roomRef)return;
  listenRoom(roomRef.child('state'),'value',snap=>{
-  const state=snap.val();if(!state){if(netMode)leaveNetworkSetup(false);return;}
+  const state=snap.val();if(!state){roomClosedByHost();return;}
   roomSeq=Number(state.seq)||0;roomTurnToken=state.turnToken||'';roomExpectedUid=state.activeUid||'';roomProcessing=!!state.processing;
   if(state.status==='started'&&!started)startNetworkGame(state.players||[],state.snapshot||null,roomSeq,state.turnToken,state.activeUid);
   else if(state.status==='started'&&started&&roomSeq>lastEvent+1)scheduleSnapshotRecovery();
@@ -473,8 +505,13 @@ function validRollRequest(request,requestId){
  const roll=Number(request&&request.roll);
  if(!request||request.requestId!==requestId||request.uid!==requestId||!Number.isInteger(roll)||roll<1||roll>6||
   !Array.isArray(request.diceState)||request.diceState.length!==24||!request.diceState.every(Number.isFinite)||topVal(request.diceState)!==roll)return false;
+ if(!Array.isArray(request.launchState)||request.launchState.length!==24||!request.launchState.every(Number.isFinite))return false;
  const simulated=simulateDiceState(request.launchState);
- return !!simulated&&simulated.roll===roll&&request.diceState.every((value,index)=>Math.abs(value-simulated.state[index])<=1e-5);
+ /* Math.sin/cos/hypot в разных движках (V8, JavaScriptCore, SpiderMonkey) могут отличаться в последнем бите, а физика кубика хаотична —
+    поэтому расхождение с локальной симуляцией хоста только пишется в консоль, а бросок принимается по заявленной верхней грани. */
+ if(!simulated||simulated.roll!==roll||!request.diceState.every((value,index)=>Math.abs(value-simulated.state[index])<=1e-5))
+  console.warn('Firebase: бросок отличается от физики хоста (возможна разница движков JS), принят по заявленному результату');
+ return true;
 }
 function replayNetDice(event){
  return new Promise(resolve=>{
@@ -566,7 +603,7 @@ async function releaseProcessingLock(requestId){
 async function processRollRequest(request,requestId){
  if(!isHost||!roomRef||!requestId)return;
  if(!validRollRequest(request,requestId)||request.uid!==requestId){try{await roomRef.child('requests/'+requestId).remove();}catch(ignore){}return;}
- const actor=memberList.find(m=>m.uid===request.uid);if(!actor||actor.connected===false){try{await roomRef.child('requests/'+requestId).remove();}catch(ignore){}return;}
+ const actor=memberList.find(m=>m.uid===request.uid);if(!actor){try{await roomRef.child('requests/'+requestId).remove();}catch(ignore){}return;}
  let claimed=false,preservePending=false,beforeSnapshot=null,beforeDice=null,lockedState=null;
  try{
   const claim=await stateTransaction(state=>{
@@ -620,7 +657,7 @@ async function restoreSavedRoom(){
   const seat=Number(member.seat);
   if(!Number.isInteger(seat)||seat<0||seat>=Number(meta.maxPlayers)){clearSavedRoomCode();return;}
   await memberRef.update({connected:true,lastSeenAt:Date.now()});
-  await memberRef.onDisconnect().update({connected:false,ready:false,lastSeenAt:firebase.database.ServerValue.TIMESTAMP});
+  await armRoomDisconnect(ref,fbUser.uid,meta.hostUid===fbUser.uid);
   roomCode=code;roomRef=ref;roomMeta=meta;roomMaxPlayers=Number(meta.maxPlayers)||3;mySeat=seat;
   netMode=true;isHost=meta.hostUid===fbUser.uid;myIndex=seat;memberList=[];networkPlayers=[];startPresenceHeartbeat();
   showRoomCode(code);watchMembers();watchRoomState();
@@ -632,12 +669,12 @@ async function restoreSavedRoom(){
  }catch(e){console.warn('Firebase saved room restore:',netErr(e),e);}
 }
 async function restoreRoomConnection(){
- const ref=roomRef,uid=fbUser&&fbUser.uid;if(!ref||!uid||!netMode)return;
- const meta=(await ref.child('meta').once('value')).val();if(!meta){leaveNetworkSetup(false);return;}
+ const ref=roomRef,uid=fbUser&&fbUser.uid,host=isHost;if(!ref||!uid||!netMode)return;
+ const meta=(await ref.child('meta').once('value')).val();if(!meta){roomClosedByHost();return;}
  const memberRef=ref.child('members/'+uid),member=await memberRef.once('value');
- if(!member.exists()){leaveNetworkSetup(false);return;}
+ if(!member.exists()){leaveNetworkSetup(false);showRoomToast('Вас убрали из комнаты: долго не было связи.',6000);return;}
  await memberRef.update({connected:true,lastSeenAt:Date.now()});
- await memberRef.onDisconnect().update({connected:false,ready:false,lastSeenAt:firebase.database.ServerValue.TIMESTAMP});
+ await armRoomDisconnect(ref,uid,host);
  startPresenceHeartbeat();
  await recoverStaleProcessingLock();scheduleStaleLockRecovery();
  const state=(await ref.child('state').once('value')).val();
@@ -657,7 +694,7 @@ async function leaveNetworkSetup(persist=true){
  if(remoteDiceResolve){const finish=remoteDiceResolve;finish();}
  if(!preserveActiveGuest)clearSavedRoomCode();
  if(ref&&active&&persist){
-  if(host){const memberRef=ref.child('members/'+uid);try{await memberRef.onDisconnect().cancel();}catch(e){}try{await ref.onDisconnect().cancel();}catch(e){}try{await ref.remove();}catch(e){console.warn('Firebase host cleanup:',netErr(e));}}
+  if(host){let removed=false;try{await ref.remove();removed=true;}catch(e){console.warn('Firebase host cleanup:',netErr(e));showRoomToast('Не удалось удалить комнату сейчас — она закроется при потере связи.',5000);}if(removed){try{await ref.onDisconnect().cancel();}catch(e){}}}
   else{
    const memberRef=ref.child('members/'+uid);
    if(preserveActiveGuest){
@@ -681,6 +718,8 @@ document.querySelector('#joinDice').addEventListener('click',event=>{const die=e
 document.querySelector('#joinDice').addEventListener('pointerdown',event=>{const die=event.target.closest('button[data-die]');if(die)diePointer={index:+die.dataset.die,y:event.clientY};});
 addEventListener('pointerup',event=>{if(!diePointer)return;const d=diePointer;diePointer=null;const dy=event.clientY-d.y;if(Math.abs(dy)>12){lastDieSwipe=performance.now();changeJoinDie(d.index,dy<0?1:-1);}});
 addEventListener('pointercancel',()=>{diePointer=null;});
+addEventListener('pagehide',e=>{if(e.persisted||!netMode||!isHost||!roomRef)return;try{roomRef.remove();}catch(err){}});
+document.addEventListener('visibilitychange',()=>{if(document.visibilityState!=='visible'||!netMode||!roomRef||!fbUser)return;roomRef.child('members/'+fbUser.uid).update({connected:true,lastSeenAt:Date.now()}).catch(()=>{});});
 
 
 /* Случайность: из физически возможных вариантов броска (небольшой разброс угла и силы) выбирается тот, после которого

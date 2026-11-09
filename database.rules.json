@@ -33,7 +33,7 @@
           "colors": {
             "$seat": {
               ".write": "auth != null && (root.child('rooms').child($roomCode).child('meta').child('hostUid').val() === auth.uid || (root.child('rooms').child($roomCode).child('members').child(auth.uid).child('seat').val() === 0 && $seat === '0') || (root.child('rooms').child($roomCode).child('members').child(auth.uid).child('seat').val() === 1 && $seat === '1') || (root.child('rooms').child($roomCode).child('members').child(auth.uid).child('seat').val() === 2 && $seat === '2') || (root.child('rooms').child($roomCode).child('members').child(auth.uid).child('seat').val() === 3 && $seat === '3') || (root.child('rooms').child($roomCode).child('members').child(auth.uid).child('seat').val() === 4 && $seat === '4'))",
-              ".validate": "newData.isString() && newData.val().matches(/^#[0-9a-fA-F]{6}$/)"
+              ".validate": "newData.isString() && newData.val().matches(/^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/)"
             }
           }
         },

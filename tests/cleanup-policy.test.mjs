@@ -16,8 +16,8 @@ const NOW = 2_000_000_000_000;
 
 function makeRoom(meta = {}, host = {}) {
   return {
-    meta: { schema: 3, hostUid: 'host-uid', status: 'lobby', createdAt: NOW - 60_000, updatedAt: NOW - 60_000, ...meta },
-    members: { 'host-uid': { connected: true, lastSeenAt: NOW - 60_000, ...host } }
+    meta: { schema: 3, hostUid: 'host-uid', status: 'lobby', createdAt: NOW - 20_000, updatedAt: NOW - 20_000, ...meta },
+    members: { 'host-uid': { connected: true, lastSeenAt: NOW - 20_000, ...host } }
   };
 }
 
@@ -25,6 +25,7 @@ test('scheduled room cleanup function parses and targets the configured RTDB reg
   assert.doesNotThrow(() => new vm.Script(functionSource, { filename: 'functions/index.js' }));
   assert.match(functionSource, /onSchedule/);
   assert.match(functionSource, /europe-west1/);
+  assert.match(functionSource, /every 15 minutes/);
   assert.match(functionSource, /roomsRef\.update\(updates\)/);
 });
 
@@ -32,7 +33,7 @@ test('a healthy room with a current host heartbeat is preserved', () => {
   assert.equal(shouldDeleteRoom(makeRoom(), NOW), false);
 });
 
-test('a host disconnect gets a one-day recovery window', () => {
+test('a room whose host is offline is a safety-net candidate after a short grace period', () => {
   assert.equal(shouldDeleteRoom(makeRoom({}, { connected: false, lastSeenAt: NOW - DISCONNECTED_HOST_TTL_MS + 1 }), NOW), false);
   assert.equal(shouldDeleteRoom(makeRoom({}, { connected: false, lastSeenAt: NOW - DISCONNECTED_HOST_TTL_MS }), NOW), true);
 });
