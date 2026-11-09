@@ -155,6 +155,14 @@ test('the room is deleted automatically when its creator leaves', () => {
   assert.ok(source.includes('if(removed){try{await ref.onDisconnect().cancel();}catch(e){}}'));
 });
 
+test('a game can start with fewer players than the room capacity once at least two are present and ready', () => {
+  assert.ok(source.includes('const full=memberList.length>=2&&memberList.length<=roomMaxPlayers&&memberList.every(m=>m.connected!==false)'));
+  assert.ok(source.includes('members.length<2||members.length>count'));
+  assert.ok(source.includes('memberList.length<2||memberList.length>roomMaxPlayers'));
+  assert.ok(!source.includes('members.length!==count'));
+  assert.ok(!source.includes('memberList.length!==roomMaxPlayers'));
+});
+
 test('critical network handlers are declared only once', () => {
   for (const name of ['ensureAuth','createRoom','joinRoom','watchRoomState','processRollRequest','makeNetSnapshot','applyNetSnapshot','leaveNetworkSetup','armRoomDisconnect','roomClosedByHost']) {
     assert.equal(source.split('function ' + name + '(').length - 1, 1, name + ' should be declared once');
