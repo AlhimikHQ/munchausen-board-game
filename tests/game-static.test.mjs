@@ -26,9 +26,9 @@ test('Firebase SDK is pinned and loaded only for multiplayer', () => {
 
 test('Firebase failures are visible in the game instead of only the WebView console', () => {
   assert.ok(source.includes('function showRoomToast(message'));
-  assert.ok(source.includes('function reportFirebase(context,error)'));
+  assert.ok(source.includes('function reportFirebase(icon,error)'));
   assert.ok(source.includes("target.on(event,callback,onError)"));
-  assert.ok(source.includes("reportFirebase('Не удалось отправить ход в Firebase',e)"));
+  assert.ok(source.includes("reportFirebase('🎲',e)"));
   assert.ok(source.includes("firebase.database().goOnline()"));
 });
 
@@ -68,16 +68,11 @@ test('default player colours are six-digit hex values accepted by the database r
 test('room creation does not hide a rules rejection behind a retry loop', () => {
   assert.ok(source.includes("if(netErr(e)!=='permission-denied')throw e;"));
   assert.ok(source.includes('if(!taken.exists())throw e;'));
-  assert.ok(source.includes("throw new Error('Нет свободных кодов комнат. Попробуйте позже.')"));
+  assert.ok(source.includes("throw new Error('No free room code')"));
 });
 
-test('joining a room explains every refusal instead of failing silently', () => {
-  for (const text of [
-    'Комната с таким кодом не найдена',
-    'Комната создана другой версией игры',
-    'Игра в этой комнате уже началась.',
-    'В комнате нет свободных мест.'
-  ]) assert.ok(source.includes(text), text);
+test('joining a room reports every refusal with a symbol instead of failing silently', () => {
+  for (const symbol of ['🏠❓', '⚠️🔄', '🏠🔒', '▶️🚫', '👥🚫', '🎲❓']) assert.ok(source.includes("'" + symbol + "'"), symbol);
   assert.ok(source.includes('const refuse=message=>showRoomToast(message,5500);'));
 });
 
@@ -122,7 +117,7 @@ test('untrusted dice requests are checked, but a physics mismatch between JS eng
   assert.ok(source.includes('const simulated=simulateDiceState(request.launchState);'));
   assert.ok(source.includes('Math.abs(value-simulated.state[index])<=1e-5'));
   assert.ok(source.includes('roll<1||roll>6'));
-  assert.ok(source.includes('принят по заявленному результату'));
+  assert.ok(source.includes('accepted as reported'));
 });
 
 test('reconnect, gap recovery and subscription disposal are implemented', () => {
@@ -148,21 +143,31 @@ test('the room is deleted automatically when its creator leaves', () => {
   assert.ok(source.includes('function roomClosedByHost()'));
   assert.ok(source.includes('if(!roomMeta){roomClosedByHost();return;}'));
   assert.ok(source.includes('if(!state){roomClosedByHost();return;}'));
-  assert.ok(source.includes('Создатель вышел — комната закрыта.'));
+  assert.ok(source.includes("host?'📡❌':'🏠❌'"));
   // closing the page deletes the room immediately, a manual exit removes it first and only then cancels the handler
   assert.ok(source.includes("addEventListener('pagehide'"));
   assert.ok(source.includes('try{await ref.remove();removed=true;}'));
   assert.ok(source.includes('if(removed){try{await ref.onDisconnect().cancel();}catch(e){}}'));
 });
 
-test('the lobby shows the same player count to everyone and starts the draw by itself when the open seats are full', () => {
+test('the lobby shows the same player count to everyone and the host starts the game with the play button', () => {
   assert.ok(source.includes('function openSeatList()'));
   assert.ok(source.includes("np=open.length;$('#pn').textContent=np;"));
   assert.ok(source.includes("roomClosed=new Set(Object.keys(settings.closed||{})"));
-  assert.ok(source.includes('if(open.length<2||members.length!==open.length||!members.every(m=>open.includes(Number(m.seat))&&m.connected!==false))return;'));
+  assert.ok(source.includes('async function startFromLobby()'));
   assert.ok(source.includes('color:seatColor(Number(m.seat))'));
   assert.ok(source.includes("function refreshSw(){if(netMode&&!started){renderLobbySeats();return;}"));
+  // the host can start even when seats are vacant; nobody is started automatically
+  assert.ok(source.includes('if(!members.length)return;'));
+  assert.ok(source.includes('players.length<1)return;'));
+  assert.ok(!source.includes('maybeStartNetworkGame'));
   assert.ok(!source.includes("members/'+fbUser.uid+'/ready'"));
+});
+
+test('the play button connects, starts or waits depending on the network state', () => {
+  assert.ok(source.includes("$('#go').onclick=()=>{if(netMode){if(isHost&&!started)startFromLobby();return;}if(!$('#net').hidden){joinRoom();return;}"));
+  assert.ok(source.includes("go.textContent='⏳'"));
+  assert.ok(source.includes('function applyNetUi()'));
 });
 
 test('the host can remove a player, close a vacant seat and reopen it; the removed player is told', () => {
@@ -170,15 +175,35 @@ test('the host can remove a player, close a vacant seat and reopen it; the remov
   assert.ok(source.includes("{uid:'closed',seat,joinedAt:Date.now()}"));
   assert.ok(source.includes("await roomRef.child('settings/closed/'+seat).set(true);"));
   assert.ok(source.includes("await roomRef.child('settings/closed/'+seat).remove();"));
-  assert.ok(source.includes('В игре должно остаться минимум два игрока.'));
+  assert.ok(source.includes("'2️⃣🚫'"));
   assert.ok(source.includes('if(netMode&&!started&&!isHost&&myIndex<0){roomKicked();return;}'));
-  assert.ok(source.includes('Создатель убрал вас из комнаты.'));
-  assert.ok(source.includes("k.className='kick'"));
+  assert.ok(source.includes("'👤🚫'"));
+  assert.ok(source.includes("kb.className='kick'"));
   assert.ok(source.includes('if(isHost&&!mine){'));
 });
 
+test('the main menu button asks for confirmation with symbols only', () => {
+  assert.ok(html.includes('<button id="exitBtn"'));
+  assert.ok(html.includes('<div id="exitAsk" hidden><button class="ok"'));
+  assert.ok(source.includes("$('#exitAsk .ok').onclick=async()=>{"));
+  assert.ok(source.includes("if(netMode)await withTimeout(leaveNetworkSetup(true),4000,'exit timeout');"));
+  assert.ok(source.includes("$('#setup').hidden=true;$('#exitBtn').hidden=false;"));
+});
+
+test('the game shows no words: no Cyrillic text in string literals or markup', () => {
+  const stripped = html
+    .replace(/data:[a-z/+]+;base64,[A-Za-z0-9+/=]+/g, '')
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/(^|[^:'"\w])\/\/[^\n]*/g, '$1');
+  const literal = /(['"`])(?:(?!\1)[^\\\n]|\\.)*[А-Яа-яЁё](?:(?!\1)[^\\\n]|\\.)*\1/;
+  const hit = stripped.match(literal);
+  assert.equal(hit, null, 'visible text found: ' + (hit && hit[0]));
+  const markup = stripped.slice(stripped.indexOf('<body>'), stripped.indexOf('<script>'));
+  assert.ok(!/[А-Яа-яЁё]/.test(markup), 'Cyrillic text in the markup');
+});
+
 test('critical network handlers are declared only once', () => {
-  for (const name of ['ensureAuth','createRoom','joinRoom','watchRoomState','processRollRequest','makeNetSnapshot','applyNetSnapshot','leaveNetworkSetup','armRoomDisconnect','roomClosedByHost','openSeatList','renderLobbySeats','updateLobbyControls','kickPlayer','closeSeat','reopenSeat','roomKicked']) {
+  for (const name of ['ensureAuth','createRoom','joinRoom','watchRoomState','processRollRequest','makeNetSnapshot','applyNetSnapshot','leaveNetworkSetup','armRoomDisconnect','roomClosedByHost','openSeatList','renderLobbySeats','updateLobbyControls','kickPlayer','closeSeat','reopenSeat','roomKicked','startFromLobby','applyNetUi']) {
     assert.equal(source.split('function ' + name + '(').length - 1, 1, name + ' should be declared once');
   }
 });
