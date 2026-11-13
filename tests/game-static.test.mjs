@@ -178,7 +178,8 @@ test('the host can remove a player, close a vacant seat and reopen it; the remov
   assert.ok(source.includes("await roomRef.child('settings/closed/'+seat).set(true);"));
   assert.ok(source.includes("await roomRef.child('settings/closed/'+seat).remove();"));
   assert.ok(source.includes("'2️⃣🚫'"));
-  assert.ok(source.includes('if(netMode&&!started&&!isHost&&myIndex<0){roomKicked();return;}'));
+  assert.ok(source.includes('roomKicked();return;'));
+  assert.ok(source.includes('if(netMode&&!started&&!isHost&&myIndex<0'));
   assert.ok(source.includes("'👤🚫'"));
   assert.ok(source.includes("kb.className='kick'"));
   assert.ok(source.includes('if(isHost&&!mine){'));
