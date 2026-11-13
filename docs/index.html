@@ -392,8 +392,11 @@ function watchMembers(){
  });
  listenRoom(roomRef.child('members'),'value',snap=>{
   memberList=[];snap.forEach(child=>memberList.push({uid:child.key,...(child.val()||{})}));
-  memberList.sort((a,b)=>Number(a.seat||0)-Number(b.seat||0));myIndex=memberList.findIndex(m=>m.uid===fbUser?.uid);mySeat=myIndex<0?-1:Number(memberList[myIndex].seat);
-  if(netMode&&!started&&!isHost&&myIndex<0){roomKicked();return;}
+  memberList.sort((a,b)=>Number(a.seat||0)-Number(b.seat||0));myIndex=memberList.findIndex(m=>m.uid===fbUser?.uid);
+  if(myIndex>=0)mySeat=Number(memberList[myIndex].seat);
+  else if(Number.isInteger(mySeat)&&mySeat>=0){/* только что заняли место — snapshot members может прийти раньше собственной записи */}
+  else mySeat=-1;
+  if(netMode&&!started&&!isHost&&myIndex<0&&!(Number.isInteger(mySeat)&&mySeat>=0)){roomKicked();return;}
   updateLobbyControls();cleanupInactiveMembers().catch(e=>console.warn('Firebase member cleanup:',netErr(e)));
  });
  listenRoom(roomRef.child('settings'),'value',snap=>{
@@ -487,22 +490,55 @@ async function joinRoom(){
    claimedSeat=Number(member.seat);if(!Number.isInteger(claimedSeat)||claimedSeat<0||claimedSeat>=roomMaxPlayers){refuse('👤❓');return;}
   }else{
    if(meta.status!=='lobby'){refuse('▶️🚫');return;}
-   for(let seat=0;seat<roomMaxPlayers;seat++){
+   /* Сначала пробуем места 1..max-1, потом 0: место 0 почти всегда у хоста, а transaction по чужому слоту
+      без права чтения даёт permission-denied и в части SDK срывает цикл занятия места. */
+   const seatOrder=[];
+   for(let s=1;s<roomMaxPlayers;s++)seatOrder.push(s);
+   seatOrder.push(0);
+   const tryClaim=async seat=>{
+    const slotRef=ref.child('slots/'+seat);
+    /* Пустой слот можно прочитать (!data.exists()). Занятый/closed чужой — нет: пропускаем без transaction. */
     try{
-     const tx=await ref.child('slots/'+seat).transaction(current=>current===null?{uid:fbUser.uid,seat,joinedAt:Date.now()}:undefined,null,false);
-     if(tx.committed){claimedSeat=seat;break;}
-    }catch(slotError){if(netErr(slotError)!=='permission-denied')throw slotError;}
+     const snap=await withTimeout(slotRef.once('value'),8000,'Firebase seat lookup timeout');
+     if(snap.exists())return -1;
+    }catch(readErr){
+     if(netErr(readErr)==='permission-denied')return -1;
+     throw readErr;
+    }
+    try{
+     const tx=await withTimeout(slotRef.transaction(current=>current===null?{uid:fbUser.uid,seat,joinedAt:Date.now()}:undefined,null,false),10000,'Firebase seat claim timeout');
+     if(tx&&tx.committed)return seat;
+    }catch(slotError){
+     if(netErr(slotError)!=='permission-denied')throw slotError;
+    }
+    return -1;
+   };
+   for(const seat of seatOrder){
+    claimedSeat=await tryClaim(seat);
+    if(claimedSeat>=0)break;
+   }
+   /* Повтор при гонке двух гостей за одно место */
+   if(claimedSeat<0){
+    for(const seat of seatOrder){
+     claimedSeat=await tryClaim(seat);
+     if(claimedSeat>=0)break;
+    }
    }
    if(claimedSeat<0){refuse('👥🚫');return;}
    member={name:'P'+(claimedSeat+1),ready:false,seat:claimedSeat,joinedAt:Date.now(),connected:true,lastSeenAt:Date.now()};
    createdMember=true;
-   await memberRef.set(member);
+   try{
+    await withTimeout(memberRef.set(member),10000,'Firebase membership write timeout');
+   }catch(memberErr){
+    try{await ref.child('slots/'+claimedSeat).remove();}catch(ignore){}
+    throw memberErr;
+   }
   }
   if(stale()){if(createdMember){try{await memberRef.remove();await ref.child('slots/'+claimedSeat).remove();}catch(e){}}return;}
   await memberRef.update({connected:true,lastSeenAt:Date.now()});
   const hostHere=meta.hostUid===fbUser.uid;
   await armRoomDisconnect(ref,fbUser.uid,hostHere);
-  roomCode=code;roomRef=ref;netMode=true;isHost=hostHere;mySeat=claimedSeat;myIndex=claimedSeat;saveRoomCode(code);startPresenceHeartbeat();
+  roomCode=code;roomRef=ref;netMode=true;isHost=hostHere;mySeat=claimedSeat;myIndex=-1;saveRoomCode(code);startPresenceHeartbeat();
   showRoomCode(code);watchMembers();watchRoomState();
   updateLobbyControls();
  }catch(e){
