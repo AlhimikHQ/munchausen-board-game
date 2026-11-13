@@ -201,6 +201,7 @@ const FIREBASE_SCHEMA=3,ROOM_EVENT_LIMIT=64,ROOM_STALE_MEMBER_MS=2*60*1000,ROOM_
 const NETWORK_DEFAULT_COLORS=['#e02020','#1e5bff','#1faa3c','#ffe94d','#ffffff'];
 let netMode=false,fbUser=null,roomRef=null,roomCode='',isHost=false,myIndex=-1,mySeat=-1,memberList=[],networkPlayers=[],roomMeta=null;
 let roomColors=NETWORK_DEFAULT_COLORS.slice(),roomClosed=new Set();
+let absentTimer=0;const absentSince=new Map(),autoSkipped=new Set();
 let roomTurnToken='',roomExpectedUid='',roomProcessing=false,roomAnimationPending=false,lastEvent=0,roomSeq=0,roomMaxPlayers=3,roomStarting=false,roomStartPending=false;
 let requestQueue=Promise.resolve(),eventQueue=Promise.resolve(),pendingNetEvents=Object.create(null);
 let authError='',authPromise=null,authStateUnsub=null,connectionRef=null,connectionState=null,roomListeners=[];
@@ -266,7 +267,7 @@ function renderJoinDice(rollingIndex=-1){const e=$('#joinDice');if(e)e.innerHTML
 function changeJoinDie(index,step){if(!Number.isInteger(index)||index<0||index>=3)return;joinDiceValues[index]=(joinDiceValues[index]-1+step+6)%6+1;renderJoinDice(index);}
 function showRoomCode(code){const e=$('#roomCodeDisplay');if(e)e.innerHTML=[...code].map((v,i)=>dieMarkup(+v,i,false)).join('');}
 function listenRoom(target,event,callback){const onError=error=>reportFirebase('📥',error);target.on(event,callback,onError);roomListeners.push({target,event,callback});}
-function stopRoomListeners(){roomListeners.forEach(x=>{try{x.target.off(x.event,x.callback);}catch(e){}});roomListeners=[];}
+function stopRoomListeners(){stopAbsentWatch();roomListeners.forEach(x=>{try{x.target.off(x.event,x.callback);}catch(e){}});roomListeners=[];}
 function startPresenceHeartbeat(){
  if(presenceHeartbeatTimer)clearInterval(presenceHeartbeatTimer);
  if(!roomRef||!fbUser)return;
@@ -557,7 +558,7 @@ function initNetworkBoard(players){
 function startNetworkGame(players,snapshot,seq=0,turnToken='',activeUid=''){
  if(started||!Array.isArray(players)||players.length<1)return;
  roomStarting=true;roomSeq=Number(seq)||0;lastEvent=roomSeq;roomTurnToken=turnToken||'';roomExpectedUid=activeUid||'';
- initNetworkBoard(players);if(snapshot)applyNetSnapshot(snapshot);initMotion();banner('● 🎲 ?',0);
+ initNetworkBoard(players);if(snapshot)applyNetSnapshot(snapshot);initMotion();banner('● 🎲 ?',0);if(isHost)startAbsentWatch();
 }
 function makeNetSnapshot(){
  return{version:FIREBASE_SCHEMA,seq:roomSeq,playerCount:np,colors:COL.slice(0,np),playerUids:networkPlayers.map(p=>p.uid),mode,dl:dl.slice(),di,dr,cur,TO:TO.slice(),
@@ -566,7 +567,7 @@ function makeNetSnapshot(){
 }
 function applyNetSnapshot(snapshot){
  if(!snapshot||!started)return;
- if(Array.isArray(snapshot.colors))updateRoomPlayerColors(snapshot.colors);
+ if(Array.isArray(snapshot.colors))COL.splice(0,COL.length,...NETWORK_DEFAULT_COLORS.map((c,i)=>snapshot.colors[i]||c)); /* цвета в снимке идут по номеру игрока, а не по месту */
  np=Number(snapshot.playerCount)||((snapshot.players||[]).length)||np;$('#pn').textContent=np;
  mode=snapshot.mode;dl=snapshot.dl||[];di=snapshot.di||0;dr=snapshot.dr||{};cur=snapshot.cur||0;TO=snapshot.TO||[];DRES=snapshot.DRES||{};
  ORD.splice(0,ORD.length,...(snapshot.ORD||[]));LB.splice(0,LB.length,...(snapshot.LB||[]));over=!!snapshot.over;
@@ -625,6 +626,12 @@ async function playNetTurn(event){
  await Promise.all([replayNetDice(event),play(Number(event.roll))]);
 }
 async function runNetEvent(event){
+ if(event&&event.type==='skip'){
+  roomAnimationPending=true;
+  try{banner('● ⏭',Number(event.skipped)||0,900);if(event.snapshot)applyNetSnapshot(event.snapshot);}finally{roomAnimationPending=false;}
+  roomSeq=Number(event.seq)||roomSeq;roomTurnToken=event.turnToken||roomTurnToken;roomExpectedUid=event.activeUid||roomExpectedUid;
+  return;
+ }
  if(!event||event.type!=='roll'||!Number.isInteger(Number(event.roll)))return;
  roomAnimationPending=true;
  try{
@@ -684,6 +691,47 @@ function scheduleStaleLockRecovery(){
  if(staleLockRecoveryTimer)clearTimeout(staleLockRecoveryTimer);
  staleLockRecoveryTimer=setTimeout(()=>{staleLockRecoveryTimer=0;recoverStaleProcessingLock().catch(e=>console.warn('Firebase stale lock recovery:',netErr(e),e));},35000);
 }
+/* Игрок вышел или пропал посреди партии: через 12 с создатель сам передаёт ход дальше (как обычный пропуск хода), в розыгрыше очерёдности отсутствующему засчитывается 1.
+   Когда игрок возвращается, он продолжает с того места, где игра сейчас. */
+async function skipAbsentTurn(){
+ if(!isHost||!roomRef||!started||over||roomProcessing||roomAnimationPending||busy||roomStartPending)return;
+ const idx=activePlayerIndex(makeNetSnapshot()),pl=networkPlayers[idx];
+ if(!pl||pl.uid===(fbUser&&fbUser.uid))return;
+ const member=memberList.find(x=>x.uid===pl.uid);
+ if(member&&member.connected!==false){absentSince.delete(pl.uid);autoSkipped.delete(pl.uid);return;}
+ const t0=Date.now();if(!absentSince.has(pl.uid))absentSince.set(pl.uid,t0);
+ if(!autoSkipped.has(pl.uid)&&t0-absentSince.get(pl.uid)<12000)return;
+ let claimed=false,beforeSnapshot=null,lockedState=null;
+ try{
+  const claim=await stateTransaction(state=>{
+   if(!state||state.status!=='started'||state.processing||state.activeUid!==pl.uid)return;
+   state.processing={requestId:'skip',uid:pl.uid,turnToken:state.turnToken,claimedAt:Date.now()};return state;
+  },null,false);
+  claimed=claim.committed;lockedState=claim.snapshot&&claim.snapshot.val();if(!claimed)return;
+  autoSkipped.add(pl.uid);roomProcessing=true;beforeSnapshot=makeNetSnapshot();
+  let type='skip',roll=0,dice=null;
+  if(mode==='draw'){type='roll';roll=1;dice=Array.from(newS());await playNetTurn({by:pl.uid,roll,launchState:[],diceState:dice});}
+  else{banner('● ⏭',cur,900);next();}
+  if(!lockedState||!lockedState.processing||lockedState.processing.requestId!=='skip')throw new Error('Turn lock lost before commit');
+  const seq=(Number(lockedState.seq)||0)+1,snapshot=makeNetSnapshot();snapshot.seq=seq;
+  const nextIndex=activePlayerIndex(snapshot),activeUid=networkPlayers[nextIndex]&&networkPlayers[nextIndex].uid||'',turnToken=makeTurnToken(seq,activeUid),now=Date.now();
+  const event={seq,type,roll,by:pl.uid,auto:true,skipped:idx,diceState:dice||Array.from(S),snapshot,activeUid,turnToken,createdAt:now};
+  const nextState={status:'started',seq,players:networkPlayers.map((q,i)=>({...q,color:COL[i]})),snapshot,activeUid,turnToken,processing:null,updatedAt:now};
+  const updates={state:nextState,['events/'+String(seq).padStart(12,'0')]:event,'meta/updatedAt':now};
+  if(seq>ROOM_EVENT_LIMIT)updates['events/'+String(seq-ROOM_EVENT_LIMIT).padStart(12,'0')]=null;
+  await roomRef.update(updates);
+  roomSeq=seq;lastEvent=seq;roomTurnToken=turnToken;roomExpectedUid=activeUid;roomProcessing=false;
+ }catch(e){
+  if(beforeSnapshot&&started)applyNetSnapshot(beforeSnapshot);
+  if(claimed){try{await releaseProcessingLock('skip');}catch(ignore){}}
+  roomProcessing=false;reportFirebase('⏭',e);
+ }
+}
+function startAbsentWatch(){
+ stopAbsentWatch();
+ absentTimer=setInterval(()=>{requestQueue=requestQueue.then(skipAbsentTurn).catch(e=>console.warn('Firebase skip turn:',netErr(e),e));},3000);
+}
+function stopAbsentWatch(){if(absentTimer){clearInterval(absentTimer);absentTimer=0;}absentSince.clear();autoSkipped.clear();}
 async function releaseProcessingLock(requestId){
  if(!roomRef||!isHost)return;
  await stateTransaction(state=>{
