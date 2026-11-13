@@ -79,7 +79,7 @@ test('joining a room reports every refusal with a symbol instead of failing sile
 test('multiplayer transactions touch only the small state node and retry an empty local cache', () => {
   assert.ok(source.includes('function stateTransaction(updateFn)'));
   assert.ok(source.includes('state=>state===null?null:updateFn(state)'));
-  assert.equal(source.split('stateTransaction(').length - 1, 5);
+  assert.equal(source.split('stateTransaction(').length - 1, 6);
   assert.ok(source.includes('await roomRef.update(updates)'));
   assert.ok(!source.includes('roomRef.transaction('));
   assert.ok(!source.includes('roomTransaction('));
@@ -89,8 +89,10 @@ test('network dice replay and pawn movement run concurrently after the initial d
   assert.ok(source.includes('async function playNetTurn(event)'));
   assert.ok(source.includes("if(mode==='draw'){"));
   assert.ok(source.includes('await Promise.all([replayNetDice(event),play(Number(event.roll))])'));
-  assert.ok(source.includes('await playNetTurn({by:request.uid'));
+  assert.ok(source.includes('function playInstant(roll)'));
+  assert.ok(source.includes('playInstant(Number(request.roll))'));
   assert.ok(source.includes('await playNetTurn(event)'));
+  assert.ok(source.includes('async function processHostOwnRoll'));
   assert.ok(source.includes('roomAnimationPending=true;'));
   assert.ok(source.includes('roomAnimationPending=false;'));
   assert.ok(source.includes('function awaitingOrDraw(){return awaiting()&&!roomProcessing&&!roomAnimationPending;}'));
@@ -158,7 +160,7 @@ test('the lobby shows the same player count to everyone and the host starts the 
   assert.ok(source.includes('color:seatColor(Number(m.seat))'));
   assert.ok(source.includes("function refreshSw(){if(netMode&&!started){renderLobbySeats();return;}"));
   // the host can start even when seats are vacant; nobody is started automatically
-  assert.ok(source.includes('if(!members.length)return;'));
+  assert.ok(source.includes("if(!members.length){showRoomToast('👤❓',3500);return;}"));
   assert.ok(source.includes('players.length<1)return;'));
   assert.ok(!source.includes('maybeStartNetworkGame'));
   assert.ok(!source.includes("members/'+fbUser.uid+'/ready'"));
@@ -211,14 +213,14 @@ test('a player who left in the middle of the game is skipped by the host instead
   assert.ok(source.includes('async function skipAbsentTurn()'));
   assert.ok(source.includes('t0-absentSince.get(pl.uid)<12000'));
   assert.ok(source.includes("state.processing={requestId:'skip',uid:pl.uid,turnToken:state.turnToken,claimedAt:Date.now()}"));
-  assert.ok(source.includes("else{banner('● ⏭',cur,900);next();}"));
+  assert.ok(source.includes("banner('● ⏭',cur,400)"));
   assert.ok(source.includes("if(event&&event.type==='skip'){"));
   assert.ok(source.includes('if(isHost)startAbsentWatch();'));
   assert.ok(source.includes('function stopRoomListeners(){stopAbsentWatch();'));
 });
 
 test('critical network handlers are declared only once', () => {
-  for (const name of ['ensureAuth','createRoom','joinRoom','watchRoomState','processRollRequest','makeNetSnapshot','applyNetSnapshot','leaveNetworkSetup','armRoomDisconnect','roomClosedByHost','openSeatList','renderLobbySeats','updateLobbyControls','kickPlayer','closeSeat','reopenSeat','roomKicked','startFromLobby','applyNetUi','skipAbsentTurn','startAbsentWatch','stopAbsentWatch']) {
+  for (const name of ['ensureAuth','createRoom','joinRoom','watchRoomState','processRollRequest','makeNetSnapshot','applyNetSnapshot','leaveNetworkSetup','armRoomDisconnect','roomClosedByHost','openSeatList','renderLobbySeats','updateLobbyControls','kickPlayer','closeSeat','reopenSeat','roomKicked','startFromLobby','applyNetUi','skipAbsentTurn','startAbsentWatch','stopAbsentWatch','playInstant','processHostOwnRoll']) {
     assert.equal(source.split('function ' + name + '(').length - 1, 1, name + ' should be declared once');
   }
 });

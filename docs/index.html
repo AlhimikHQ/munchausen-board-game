@@ -533,17 +533,43 @@ async function startFromLobby(){
  if(!isHost||started||roomStarting||roomStartPending||!roomRef||!roomMeta||roomMeta.status!=='lobby')return;
  roomStartPending=true;
  try{
+  /* memberList может ещё не прийти с сервера в момент нажатия ▶ — подтягиваем актуальный список */
+  if(!memberList.length||!memberList.some(m=>m.uid===(fbUser&&fbUser.uid))){
+   try{
+    const snap=await roomRef.child('members').once('value');
+    memberList=[];snap.forEach(child=>memberList.push({uid:child.key,...(child.val()||{})}));
+    memberList.sort((a,b)=>Number(a.seat||0)-Number(b.seat||0));
+    myIndex=memberList.findIndex(m=>m.uid===fbUser?.uid);mySeat=myIndex<0?-1:Number(memberList[myIndex].seat);
+   }catch(e){console.warn('Firebase members refresh before start:',netErr(e),e);}
+  }
   const open=openSeatList();
   const gone=memberList.filter(m=>m.connected===false);
-  const members=memberList.filter(m=>m.connected!==false&&open.includes(Number(m.seat))).sort((a,b)=>Number(a.seat||0)-Number(b.seat||0));
-  if(!members.length)return;
+  let members=memberList.filter(m=>m.connected!==false&&open.includes(Number(m.seat))).sort((a,b)=>Number(a.seat||0)-Number(b.seat||0));
+  /* создатель комнаты всегда участвует: если его нет в members (гонка/обрыв), добавляем на своё место */
+  if(fbUser&&!members.some(m=>m.uid===fbUser.uid)){
+   const hostSeat=Number.isInteger(mySeat)&&mySeat>=0?mySeat:0;
+   if(open.includes(hostSeat)){
+    members=[{uid:fbUser.uid,seat:hostSeat,name:'P'+(hostSeat+1),connected:true},...members]
+     .sort((a,b)=>Number(a.seat||0)-Number(b.seat||0));
+   }
+  }
+  if(!members.length){showRoomToast('👤❓',3500);return;}
   const players=members.map(m=>({uid:m.uid,seat:Number(m.seat),name:m.name||'P',color:seatColor(Number(m.seat))}));
   const snapshot=makeInitialSnapshot(players),activeUid=players[0].uid,turnToken=makeTurnToken(0,activeUid),now=Date.now();
   const state={status:'started',seq:0,players,snapshot,activeUid,turnToken,processing:null,updatedAt:now};
   const updates={'meta/status':'started','meta/updatedAt':now,state};
   gone.forEach(m=>{updates['members/'+m.uid]=null;updates['slots/'+m.seat]=null;});
+  /* гарантируем запись создателя в members/slots на старте */
+  if(fbUser){
+   const hostPlayer=players.find(p=>p.uid===fbUser.uid);
+   if(hostPlayer){
+    updates['members/'+fbUser.uid]={name:hostPlayer.name||'P1',ready:true,seat:hostPlayer.seat,joinedAt:Date.now(),connected:true,lastSeenAt:Date.now()};
+    updates['slots/'+hostPlayer.seat]={uid:fbUser.uid,seat:hostPlayer.seat,joinedAt:Date.now()};
+   }
+  }
   await roomRef.update(updates);
   startNetworkGame(players,snapshot,0,turnToken,activeUid);
+  roomStarting=false;
  }catch(e){reportFirebase('▶️',e);}finally{roomStartPending=false;}
 }
 
@@ -559,6 +585,9 @@ function startNetworkGame(players,snapshot,seq=0,turnToken='',activeUid=''){
  if(started||!Array.isArray(players)||players.length<1)return;
  roomStarting=true;roomSeq=Number(seq)||0;lastEvent=roomSeq;roomTurnToken=turnToken||'';roomExpectedUid=activeUid||'';
  initNetworkBoard(players);if(snapshot)applyNetSnapshot(snapshot);initMotion();banner('● 🎲 ?',0);if(isHost)startAbsentWatch();
+ roomStarting=false;
+ /* синхронизируем myIndex с порядком networkPlayers (по местам) */
+ if(fbUser){myIndex=networkPlayers.findIndex(p=>p.uid===fbUser.uid);if(myIndex>=0)mySeat=Number(networkPlayers[myIndex].seat);}
 }
 function makeNetSnapshot(){
  return{version:FIREBASE_SCHEMA,seq:roomSeq,playerCount:np,colors:COL.slice(0,np),playerUids:networkPlayers.map(p=>p.uid),mode,dl:dl.slice(),di,dr,cur,TO:TO.slice(),
@@ -617,6 +646,34 @@ function replayNetDice(event){
   remoteDiceTimer=setTimeout(finish,8000);requestAnimationFrame(dieLoop);
  });
 }
+/* Мгновенное применение хода без анимации — для авторитетной записи хоста, чтобы не блокировать следующий ход. */
+function playInstant(roll){
+ if(!Number.isInteger(roll)||roll<1||roll>6||over)return;
+ busy=true;V.armed=false;
+ if(mode==='draw'){
+  const i=dl[di];(DRES[i]=DRES[i]||[]).push(roll);showDL();di++;
+  if(di<dl.length){const k=dl[di];act(k);busy=false;return}
+  const G={};Object.keys(DRES).forEach(k=>{const y=DRES[k].join();(G[y]=G[y]||[]).push(+k)});
+  const tied=[].concat(...Object.values(G).filter(g=>g.length>1)).sort((a,b)=>a-b);
+  if(tied.length){dl=tied;di=0;act(tied[0]);busy=false;return}
+  TO=rankList();LB=[...TO];mode='play';cur=TO[0];busy=false;showDL(true);act(cur);return;
+ }
+ const i=cur,p=P[i];
+ let pos=p.pos,dir=1;const path=[];for(let k=0;k<roll;k++){pos+=dir;if(pos>99){pos=98;dir=-1}path.push(pos)}
+ const last=pos,j=last==99?null:J[last],dest=j?j[0]:last;
+ p.st.n++;p.st.v[roll-1]++;if(j){if(j[0]>last)p.st.up++;else p.st.dn++}
+ if(last==99){
+  p.done=ORD.push(i);if(ORD.length==P.length-1){const l=P.findIndex(q=>!q.done);if(l>=0)P[l].done=ORD.push(l)}
+  setPos(p,i,99);relayout();leaders();
+  if(ORD.length==P.length){over=true;busy=false;act(-1);return}
+  let g=0;do{cur=TO[(TO.indexOf(cur)+1)%TO.length];const q=P[cur];if(q.done)continue;if(q.skip){q.skip=0;q.st.sk++;continue}break}while(++g<30);
+  busy=false;act(cur);return;
+ }
+ if(GR[dest]&&!j)p.skip=1;
+ setPos(p,i,dest);if(j)setPos(p,i,j[0]);relayout();leaders();
+ let g=0;do{cur=TO[(TO.indexOf(cur)+1)%TO.length];const q=P[cur];if(q.done)continue;if(q.skip){q.skip=0;q.st.sk++;continue}break}while(++g<30);
+ busy=false;act(cur);
+}
 async function playNetTurn(event){
  if(mode==='draw'){
   await replayNetDice(event);
@@ -624,6 +681,40 @@ async function playNetTurn(event){
   return;
  }
  await Promise.all([replayNetDice(event),play(Number(event.roll))]);
+}
+/* Хост применяет свой бросок локально без round-trip через requests. */
+async function processHostOwnRoll(roll,launchState,diceState){
+ if(!isHost||!roomRef||!fbUser||roomProcessing||!started||over)return;
+ if(roomExpectedUid!==fbUser.uid)return;
+ const requestId=fbUser.uid,turnToken=roomTurnToken;
+ let claimed=false,beforeSnapshot=null,beforeDice=null,lockedState=null;
+ try{
+  const claim=await stateTransaction(state=>{
+   if(!state||state.status!=='started')return;
+   if(state.processing&&Date.now()-Number(state.processing.claimedAt||0)>=30000)state.processing=null;
+   if(state.processing||state.turnToken!==turnToken||state.activeUid!==fbUser.uid)return;
+   state.processing={requestId,uid:fbUser.uid,turnToken,claimedAt:Date.now()};return state;
+  },null,false);
+  claimed=claim.committed;lockedState=claim.snapshot&&claim.snapshot.val();
+  if(!claimed)return;
+  roomProcessing=true;beforeSnapshot=makeNetSnapshot();beforeDice=Array.from(S);
+  if(Array.isArray(diceState)&&diceState.length===24)S.set(diceState);
+  playInstant(Number(roll));
+  if(!lockedState||!lockedState.processing||lockedState.processing.requestId!==requestId)throw new Error('Turn lock lost before commit');
+  const seq=(Number(lockedState.seq)||0)+1,snapshot=makeNetSnapshot();snapshot.seq=seq;
+  const nextIndex=activePlayerIndex(snapshot),activeUid=networkPlayers[nextIndex]&&networkPlayers[nextIndex].uid||'',nextToken=makeTurnToken(seq,activeUid),now=Date.now();
+  const event={seq,type:'roll',roll:Number(roll),by:fbUser.uid,requestId,launchState:Array.isArray(launchState)?Array.from(launchState):[],diceState:Array.isArray(diceState)?Array.from(diceState):Array.from(S),snapshot,activeUid,turnToken:nextToken,createdAt:now};
+  const nextState={status:'started',seq,players:networkPlayers.map((p,i)=>({...p,color:COL[i]})),snapshot,activeUid,turnToken:nextToken,processing:null,updatedAt:now};
+  const updates={state:nextState,['events/'+String(seq).padStart(12,'0')]:event,'meta/updatedAt':now};
+  if(seq>ROOM_EVENT_LIMIT)updates['events/'+String(seq-ROOM_EVENT_LIMIT).padStart(12,'0')]=null;
+  await roomRef.update(updates);
+  roomSeq=seq;lastEvent=seq;roomTurnToken=nextToken;roomExpectedUid=activeUid;roomProcessing=false;
+  banner(mode==='draw'?' ':'● 🎲',activePlayerIndex(snapshot),mode==='draw'?400:0);
+ }catch(e){
+  if(beforeSnapshot&&started){applyNetSnapshot(beforeSnapshot);if(beforeDice)S.set(beforeDice);}
+  if(claimed){try{await releaseProcessingLock(requestId);}catch(ignore){}}
+  roomProcessing=false;reportFirebase('🎲',e);
+ }
 }
 async function runNetEvent(event){
  if(event&&event.type==='skip'){
@@ -710,8 +801,8 @@ async function skipAbsentTurn(){
   claimed=claim.committed;lockedState=claim.snapshot&&claim.snapshot.val();if(!claimed)return;
   autoSkipped.add(pl.uid);roomProcessing=true;beforeSnapshot=makeNetSnapshot();
   let type='skip',roll=0,dice=null;
-  if(mode==='draw'){type='roll';roll=1;dice=Array.from(newS());await playNetTurn({by:pl.uid,roll,launchState:[],diceState:dice});}
-  else{banner('● ⏭',cur,900);next();}
+  if(mode==='draw'){type='roll';roll=1;dice=Array.from(newS());S.set(dice);playInstant(roll);}
+  else{banner('● ⏭',cur,400);let g=0;do{cur=TO[(TO.indexOf(cur)+1)%TO.length];const q=P[cur];if(q.done)continue;if(q.skip){q.skip=0;q.st.sk++;continue}break}while(++g<30);busy=false;act(cur);}
   if(!lockedState||!lockedState.processing||lockedState.processing.requestId!=='skip')throw new Error('Turn lock lost before commit');
   const seq=(Number(lockedState.seq)||0)+1,snapshot=makeNetSnapshot();snapshot.seq=seq;
   const nextIndex=activePlayerIndex(snapshot),activeUid=networkPlayers[nextIndex]&&networkPlayers[nextIndex].uid||'',turnToken=makeTurnToken(seq,activeUid),now=Date.now();
@@ -743,7 +834,7 @@ async function releaseProcessingLock(requestId){
 async function processRollRequest(request,requestId){
  if(!isHost||!roomRef||!requestId)return;
  if(!validRollRequest(request,requestId)||request.uid!==requestId){try{await roomRef.child('requests/'+requestId).remove();}catch(ignore){}return;}
- const actor=memberList.find(m=>m.uid===request.uid);if(!actor){try{await roomRef.child('requests/'+requestId).remove();}catch(ignore){}return;}
+ const actor=memberList.find(m=>m.uid===request.uid)||(roomMeta&&roomMeta.hostUid===request.uid?{uid:request.uid,seat:0}:null);if(!actor){try{await roomRef.child('requests/'+requestId).remove();}catch(ignore){}return;}
  let claimed=false,preservePending=false,beforeSnapshot=null,beforeDice=null,lockedState=null;
  try{
   const claim=await stateTransaction(state=>{
@@ -759,7 +850,9 @@ async function processRollRequest(request,requestId){
    return;
   }
   roomProcessing=true;beforeSnapshot=makeNetSnapshot();beforeDice=Array.from(S);
-  await playNetTurn({by:request.uid,roll:Number(request.roll),launchState:request.launchState,diceState:request.diceState});
+  /* Мгновенно применяем результат и сразу публикуем событие — гости анимируют параллельно, без ожидания анимации на хосте. */
+  if(Array.isArray(request.diceState)&&request.diceState.length===24)S.set(request.diceState);
+  playInstant(Number(request.roll));
   if(!lockedState||!lockedState.processing||lockedState.processing.requestId!==requestId||lockedState.processing.turnToken!==request.turnToken)throw new Error('Turn lock lost before commit');
   const seq=(Number(lockedState.seq)||0)+1,snapshot=makeNetSnapshot();snapshot.seq=seq;
   const nextIndex=activePlayerIndex(snapshot),activeUid=networkPlayers[nextIndex]&&networkPlayers[nextIndex].uid||'',turnToken=makeTurnToken(seq,activeUid),now=Date.now();
@@ -769,6 +862,8 @@ async function processRollRequest(request,requestId){
   if(seq>ROOM_EVENT_LIMIT)updates['events/'+String(seq-ROOM_EVENT_LIMIT).padStart(12,'0')]=null;
   await roomRef.update(updates);
   roomSeq=seq;lastEvent=seq;roomTurnToken=turnToken;roomExpectedUid=activeUid;roomProcessing=false;
+  /* лёгкая подсветка на экране хоста (полная анимация уже у гостей) */
+  if(request.uid!==(fbUser&&fbUser.uid))banner('● 🎲',nextIndex,0);
  }catch(e){
   if(beforeSnapshot&&started){applyNetSnapshot(beforeSnapshot);if(beforeDice)S.set(beforeDice);}
   if(claimed){try{await releaseProcessingLock(requestId);}catch(ignore){}}
@@ -884,7 +979,7 @@ REC=true;const rest=steps>0&&runSteps(S,steps);REC=false;if(IG>1.5){tapSnd(IG,0)
 function snapFlat(){let k=0;if(Math.abs(S[16])>Math.abs(S[15+k]))k=1;if(Math.abs(S[17])>Math.abs(S[15+k]))k=2;const sg=S[15+k]>0?1:-1,nx=sg*S[9+k],ny=sg*S[12+k],nz=sg*S[15+k],ang=Math.acos(Math.min(1,nz)),am=Math.hypot(ny,nx);
 if(am>1e-9){const R=mmul(rodr([ny/am,-nx/am,0],ang),Array.from(S.subarray(9,18)));S.set(R,9)}
 S[2]=.5;S[3]=S[4]=S[5]=S[6]=S[7]=S[8]=0;S[20]=-1;V.on=0;job=null;const val=topVal(S);V.target=0;draw();dieRest(val)}
-function dieRest(val){if(remoteDiceResolve){const done=remoteDiceResolve;done();return}if(V.armed&&awaiting()){V.armed=false;if(netMode)netRoll(val,V.netLaunchState,Array.from(S));else play(val)}else V.armed=false}
+function dieRest(val){if(remoteDiceResolve){const done=remoteDiceResolve;done();return}if(V.armed&&awaiting()){V.armed=false;if(netMode){if(isHost&&fbUser&&roomExpectedUid===fbUser.uid&&!roomProcessing)processHostOwnRoll(val,V.netLaunchState,Array.from(S)).catch(e=>reportFirebase('🎲',e));else netRoll(val,V.netLaunchState,Array.from(S));}else play(val)}else V.armed=false}
 function initMotion(){const en=()=>addEventListener('devicemotion',onMotion);if(typeof DeviceMotionEvent!='undefined'&&DeviceMotionEvent.requestPermission)DeviceMotionEvent.requestPermission().then(r=>{if(r=='granted')en()}).catch(()=>{});else en()}
 let G_=null;const TP={};
 const hitDie=(x,y,m=14)=>{const r=cube.getBoundingClientRect();return x>r.left-m&&x<r.right+m&&y>r.top-m&&y<r.bottom+m};
