@@ -79,7 +79,7 @@ test('joining a room reports every refusal with a symbol instead of failing sile
 test('multiplayer transactions touch only the small state node and retry an empty local cache', () => {
   assert.ok(source.includes('function stateTransaction(updateFn)'));
   assert.ok(source.includes('state=>state===null?null:updateFn(state)'));
-  assert.equal(source.split('stateTransaction(').length - 1, 4);
+  assert.equal(source.split('stateTransaction(').length - 1, 5);
   assert.ok(source.includes('await roomRef.update(updates)'));
   assert.ok(!source.includes('roomRef.transaction('));
   assert.ok(!source.includes('roomTransaction('));
@@ -202,8 +202,23 @@ test('the game shows no words: no Cyrillic text in string literals or markup', (
   assert.ok(!/[А-Яа-яЁё]/.test(markup), 'Cyrillic text in the markup');
 });
 
+test('player colours in a snapshot are indexed by player, so non-contiguous seats keep the chosen colour', () => {
+  assert.ok(source.includes('COL.splice(0,COL.length,...NETWORK_DEFAULT_COLORS.map((c,i)=>snapshot.colors[i]||c))'));
+  assert.ok(!source.includes('updateRoomPlayerColors(snapshot.colors)'));
+});
+
+test('a player who left in the middle of the game is skipped by the host instead of freezing the game', () => {
+  assert.ok(source.includes('async function skipAbsentTurn()'));
+  assert.ok(source.includes('t0-absentSince.get(pl.uid)<12000'));
+  assert.ok(source.includes("state.processing={requestId:'skip',uid:pl.uid,turnToken:state.turnToken,claimedAt:Date.now()}"));
+  assert.ok(source.includes("else{banner('● ⏭',cur,900);next();}"));
+  assert.ok(source.includes("if(event&&event.type==='skip'){"));
+  assert.ok(source.includes('if(isHost)startAbsentWatch();'));
+  assert.ok(source.includes('function stopRoomListeners(){stopAbsentWatch();'));
+});
+
 test('critical network handlers are declared only once', () => {
-  for (const name of ['ensureAuth','createRoom','joinRoom','watchRoomState','processRollRequest','makeNetSnapshot','applyNetSnapshot','leaveNetworkSetup','armRoomDisconnect','roomClosedByHost','openSeatList','renderLobbySeats','updateLobbyControls','kickPlayer','closeSeat','reopenSeat','roomKicked','startFromLobby','applyNetUi']) {
+  for (const name of ['ensureAuth','createRoom','joinRoom','watchRoomState','processRollRequest','makeNetSnapshot','applyNetSnapshot','leaveNetworkSetup','armRoomDisconnect','roomClosedByHost','openSeatList','renderLobbySeats','updateLobbyControls','kickPlayer','closeSeat','reopenSeat','roomKicked','startFromLobby','applyNetUi','skipAbsentTurn','startAbsentWatch','stopAbsentWatch']) {
     assert.equal(source.split('function ' + name + '(').length - 1, 1, name + ' should be declared once');
   }
 });
