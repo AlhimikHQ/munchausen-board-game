@@ -28,11 +28,23 @@
         },
         "settings": {
           ".read": "auth != null && (root.child('rooms').child($roomCode).child('members').child(auth.uid).exists() || root.child('rooms').child($roomCode).child('meta').child('hostUid').val() === auth.uid)",
-          ".write": "auth != null && root.child('rooms').child($roomCode).child('meta').child('hostUid').val() === auth.uid",
-          ".validate": "(newData.child('playerCount').val() === 2 || newData.child('playerCount').val() === 3 || newData.child('playerCount').val() === 4 || newData.child('playerCount').val() === 5) && newData.child('colors').exists()",
+          "playerCount": {
+            ".write": "auth != null && root.child('rooms').child($roomCode).child('meta').child('hostUid').val() === auth.uid",
+            ".validate": "newData.isNumber() && (newData.val() === 2 || newData.val() === 3 || newData.val() === 4 || newData.val() === 5)"
+          },
+          "updatedAt": {
+            ".write": "auth != null && root.child('rooms').child($roomCode).child('meta').child('hostUid').val() === auth.uid",
+            ".validate": "newData.isNumber()"
+          },
+          "closed": {
+            "$seat": {
+              ".write": "auth != null && root.child('rooms').child($roomCode).child('meta').child('hostUid').val() === auth.uid",
+              ".validate": "newData.isBoolean()"
+            }
+          },
           "colors": {
             "$seat": {
-              ".write": "auth != null && (root.child('rooms').child($roomCode).child('meta').child('hostUid').val() === auth.uid || (root.child('rooms').child($roomCode).child('members').child(auth.uid).child('seat').val() === 0 && $seat === '0') || (root.child('rooms').child($roomCode).child('members').child(auth.uid).child('seat').val() === 1 && $seat === '1') || (root.child('rooms').child($roomCode).child('members').child(auth.uid).child('seat').val() === 2 && $seat === '2') || (root.child('rooms').child($roomCode).child('members').child(auth.uid).child('seat').val() === 3 && $seat === '3') || (root.child('rooms').child($roomCode).child('members').child(auth.uid).child('seat').val() === 4 && $seat === '4'))",
+              ".write": "auth != null && (root.child('rooms').child($roomCode).child('meta').child('hostUid').val() === auth.uid || (root.child('rooms').child($roomCode).child('members').child(auth.uid).exists() && ('' + root.child('rooms').child($roomCode).child('members').child(auth.uid).child('seat').val()) === $seat))",
               ".validate": "newData.isString() && newData.val().matches(/^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/)"
             }
           }
@@ -60,7 +72,7 @@
             }
           }
         },
-        ".validate": "$roomCode.matches(/^[1-6]{3}$/) && newData.hasChildren(['meta','slots','members','settings','state']) && newData.child('settings').child('playerCount').val() === newData.child('meta').child('maxPlayers').val()"
+        ".validate": "$roomCode.matches(/^[1-6]{3}$/) && (!newData.child('meta').exists() || (newData.hasChildren(['meta','slots','members','settings','state']) && newData.child('settings').child('playerCount').val() === newData.child('meta').child('maxPlayers').val()))"
       }
     }
   }
