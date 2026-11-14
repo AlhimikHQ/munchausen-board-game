@@ -10,8 +10,8 @@ button{font:inherit;padding:8px 14px;border-radius:10px;border:1px solid var(--l
 #boardw{position:relative;order:1;flex:1 1 0;min-height:0;width:100%;display:flex;align-items:flex-start;justify-content:center}
 #board{position:relative;flex:none;box-sizing:border-box;background:var(--cell);border:3px solid #c0202a;overflow:hidden;touch-action:none}
 .tok,.veh,.trl{position:absolute;pointer-events:none}.tok,.veh{transform:translate(-50%,-50%)}
-.tok{z-index:4;width:3.5%;aspect-ratio:1;box-sizing:border-box;border-radius:50%;border:1.5px solid #fff;box-shadow:0 0 0 1px #000;transition:left 66ms linear,top 66ms linear,opacity .6s}
-.veh{z-index:5;font-size:clamp(20px,6vw,38px);transition:left .45s ease-in-out,top .45s ease-in-out,opacity .45s}
+.tok{z-index:4;width:3.5%;aspect-ratio:1;box-sizing:border-box;border-radius:50%;border:1.5px solid #fff;box-shadow:0 0 0 1px #000;transition:left .3s,top .3s,opacity .6s}
+.veh{z-index:5;font-size:clamp(20px,6vw,38px);transition:left 1s ease-in-out,top 1s ease-in-out,opacity .6s}
 .trl{width:3.3%;aspect-ratio:1;border-radius:50%;transform:translate(-50%,-50%);opacity:.7;z-index:2;animation:tf .8s forwards}@keyframes tf{to{opacity:0;transform:translate(-50%,-50%) scale(.2)}}
 .tok.act::before{content:'';position:absolute;inset:-40%;border-radius:50%;background:conic-gradient(from 0deg,transparent 0%,var(--c) 45%,color-mix(in srgb,var(--c) 35%,#fff) 80%,transparent 100%);-webkit-mask:radial-gradient(farthest-side,transparent calc(100% - 4px),#000 calc(100% - 3px));mask:radial-gradient(farthest-side,transparent calc(100% - 4px),#000 calc(100% - 3px));animation:rot 1.4s linear infinite;pointer-events:none}@keyframes rot{to{transform:rotate(360deg)}}
 #vl{position:absolute;inset:0;pointer-events:none;z-index:15}
@@ -301,7 +301,8 @@ function renderLobbySeats(){
  const open=openSeatList(),meUid=fbUser&&fbUser.uid,rowA=$('#rowA');
  setSeatCols(open.length);clearMarks();swEl.innerHTML='';
  open.forEach((seat,k)=>{
-  const m=memberList.find(x=>Number(x.seat)===seat),mine=!!(m&&m.uid===meUid);
+  const m=memberList.find(x=>Number(x.seat)===seat);
+  const mine=!!(meUid&&((m&&m.uid===meUid)||(Number.isInteger(mySeat)&&mySeat===seat)));
   const c=document.createElement('button');c.type='button';c.style.background=seatColor(seat);
   if(m&&m.connected===false)c.style.opacity='.45';
   if(mine){c.className='me';c.onclick=()=>openSeatPal(seat);}else c.onclick=()=>{};
@@ -328,12 +329,21 @@ function applyNetUi(){
  else{go.textContent='▶';go.disabled=roomJoinPending||roomCreatePending;}
 }
 function openSeatPal(seat){
- if(!roomRef)return;
+ if(!roomRef||!fbUser)return;
+ const meUid=fbUser.uid;
+ const m=memberList.find(x=>Number(x.seat)===seat);
+ const mine=!!((m&&m.uid===meUid)||(Number.isInteger(mySeat)&&mySeat===seat)||(isHost&&Number(seat)===0&&(!m||m.uid===meUid)));
+ if(!mine&&!isHost){showRoomToast('🎨🚫',2500);return;}
  const o=document.createElement('div'),cur0=seatColor(seat);o.id='pal';
  const used=new Set(openSeatList().filter(s=>s!==seat).map(s=>fam(seatColor(s))));
  o.innerHTML='<div class="card"><div class="t"><span style="color:'+cur0+'">●</span> 🎨</div><div class="g"></div></div>';const g=o.querySelector('.g');
  PAL.forEach(c=>{const b=document.createElement('button');b.style.background=c;if(used.has(fam(c)))b.disabled=true;if(nzc(cur0)==c)b.className='cur';
-  b.onclick=()=>{o.remove();roomRef.child('settings/colors/'+seat).set(c).catch(e=>reportFirebase('🎨',e));};g.appendChild(b)});
+  b.onclick=()=>{
+   o.remove();
+   roomColors[seat]=c;
+   if(swEl){const btns=swEl.querySelectorAll('button');const open=openSeatList();const idx=open.indexOf(seat);if(idx>=0&&btns[idx])btns[idx].style.background=c;}
+   roomRef.child('settings/colors/'+seat).set(c).catch(e=>{reportFirebase('🎨',e);showRoomToast('🎨⚠️',3500);});
+  };g.appendChild(b)});
  o.onclick=e=>{if(e.target===o)o.remove()};document.body.appendChild(o);
 }
 function updateLobbyControls(){
@@ -384,7 +394,8 @@ async function cleanupInactiveMembers(){
  for(const m of stale){try{await roomRef.child('slots/'+m.seat).remove();await roomRef.child('members/'+m.uid).remove();}catch(e){console.warn('Firebase stale member cleanup:',netErr(e));}}
 }
 function updateRoomPlayerColors(colors){
- COL.splice(0,COL.length,...NETWORK_DEFAULT_COLORS.map((c,i)=>{const playerSeat=networkPlayers[i]&&Number.isInteger(networkPlayers[i].seat)?networkPlayers[i].seat:(memberList[i]&&Number.isInteger(memberList[i].seat)?memberList[i].seat:i);return colors&&colors[playerSeat]||c;}));refreshSw();
+ const get=s=>{if(!colors)return null;if(Array.isArray(colors))return colors[s];return colors[s]||colors[String(s)]||null;};
+ COL.splice(0,COL.length,...NETWORK_DEFAULT_COLORS.map((c,i)=>{const playerSeat=networkPlayers[i]&&Number.isInteger(networkPlayers[i].seat)?networkPlayers[i].seat:(memberList[i]&&Number.isInteger(memberList[i].seat)?memberList[i].seat:i);return get(playerSeat)||c;}));refreshSw();
  P.forEach((p,i)=>{if(p&&p.e){p.e.style.background=COL[i];p.e.style.setProperty('--c',COL[i]);}});
 }
 function watchMembers(){
@@ -404,10 +415,12 @@ function watchMembers(){
   updateLobbyControls();cleanupInactiveMembers().catch(e=>console.warn('Firebase member cleanup:',netErr(e)));
  });
  listenRoom(roomRef.child('settings'),'value',snap=>{
-  const settings=snap.val()||{},colors=Array.isArray(settings.colors)?settings.colors:Object.keys(settings.colors||{}).sort((a,b)=>Number(a)-Number(b)).map(k=>settings.colors[k]);
-  roomColors=NETWORK_DEFAULT_COLORS.map((c,i)=>colors[i]||c);
+  const settings=snap.val()||{},raw=settings.colors||{},bySeat={};
+  if(Array.isArray(raw))raw.forEach((c,i)=>{if(c)bySeat[i]=c;});
+  else Object.keys(raw).forEach(k=>{const n=Number(k);if(Number.isInteger(n)&&raw[k])bySeat[n]=raw[k];});
+  roomColors=NETWORK_DEFAULT_COLORS.map((c,i)=>bySeat[i]||c);
   roomClosed=new Set(Object.keys(settings.closed||{}).filter(k=>settings.closed[k]).map(Number));
-  updateRoomPlayerColors(colors);updateLobbyControls();
+  updateRoomPlayerColors(bySeat);updateLobbyControls();
  });
 }
 function stateTransaction(updateFn){
@@ -419,7 +432,7 @@ function roomRootData(){
  return{meta:{schema:FIREBASE_SCHEMA,hostUid:fbUser.uid,status:'lobby',maxPlayers:roomMaxPlayers,createdAt:now,updatedAt:now},
  slots:{0:{uid:fbUser.uid,seat:0,joinedAt:now}},
  members:{[fbUser.uid]:{name:'P1',ready:false,seat:0,joinedAt:now,connected:true,lastSeenAt:now}},
- settings:{playerCount:roomMaxPlayers,colors:NETWORK_DEFAULT_COLORS.slice(),updatedAt:now},
+ settings:{playerCount:roomMaxPlayers,colors:Object.fromEntries(NETWORK_DEFAULT_COLORS.map((c,i)=>[String(i),c])),updatedAt:now},
  state:{status:'lobby',seq:0,activeUid:'',turnToken:'',processing:null}};
 }
 /* Автоудаление: создатель регистрирует на сервере onDisconnect().remove() для всей комнаты — как только он выходит
@@ -545,6 +558,8 @@ async function joinRoom(){
   roomCode=code;roomRef=ref;netMode=true;isHost=hostHere;mySeat=claimedSeat;myIndex=-1;saveRoomCode(code);startPresenceHeartbeat();
   showRoomCode(code);watchMembers();watchRoomState();
   updateLobbyControls();
+  /* сразу подсветим своё место для выбора цвета */
+  if(Number.isInteger(mySeat)&&mySeat>=0)renderLobbySeats();
  }catch(e){
   reportFirebase('🚪',e);
   if(createdMember&&ref&&claimedSeat>=0){try{await ref.child('members/'+fbUser.uid).remove();await ref.child('slots/'+claimedSeat).remove();}catch(ignore){}}
@@ -1007,13 +1022,13 @@ if(v==tg){V.target=tg;return prm}if(!seen[v])seen[v]=prm}
 /* нужная грань недостижима: берём случайную из достижимых, чтобы не было перекоса к «естественному» исходу */
 const ks=Object.keys(seen),v=ks[Math.floor(Math.random()*ks.length)];V.target=+v;return seen[v]}
 
-function launch(dx,dy,sp,up,rng){if(V.on==3)return;const m=Math.hypot(dx,dy)||1;dx/=m;dy/=m;let yaw=(Math.random()*2-1)*YAW;
+function launch(dx,dy,sp,up,rng){if(V.on==3)return;if(netMode&&!canControlDie()&&!remoteDiceResolve)return;const m=Math.hypot(dx,dy)||1;dx/=m;dy/=m;let yaw=(Math.random()*2-1)*YAW;
 if(!V.on){sp=Math.min(VMAX,Math.max(sp,8));V.touched=true;V.on=1;V.t=performance.now();V.acc=0;S[18]=0;S[19]=0;S[20]=-1;S[2]=Math.max(S[2],.52);clampIn();S[3]=S[4]=S[5]=0;S[6]=S[7]=S[8]=0;V.target=0;
 if(Array.isArray(rng)){const r=pickLaunch(dx,dy,sp,rng);dx=r[0];dy=r[1];sp=r[2];yaw=r[3]}
 requestAnimationFrame(dieLoop)}
 S[3]+=dx*sp;S[4]+=dy*sp;S[5]+=(up||0);const hs=Math.hypot(S[3],S[4]);if(hs>VMAX){S[3]*=VMAX/hs;S[4]*=VMAX/hs}
 S[6]=-S[4]/.5*SK;S[7]=S[3]/.5*SK;S[8]=yaw; /* качение без проскальзывания: ω = (z×v)/R, грани сменяются как у настоящего куба */
-V.netLaunchState=Array.from(S);if(awaiting())V.armed=true}
+V.netLaunchState=Array.from(S);if(canControlDie())V.armed=true}
 function dieLoop(now){if(V.on!=1)return;V.acc+=Math.min((now-V.t)/1000,.05);V.t=now;let steps=Math.floor(V.acc/HH);V.acc-=steps*HH;
 if(job&&!job.done)tuneSlice(5);if(job&&!job.done){steps=Math.min(steps,Math.max(0,job.nk-S[18]));V.acc=Math.min(V.acc,HH)}else job=null;
 REC=true;const rest=steps>0&&runSteps(S,steps);REC=false;if(IG>1.5){tapSnd(IG,0)}IG=0;if(IW>1.5){tapSnd(IW,1)}IW=0;draw();if(rest){snapFlat();return}requestAnimationFrame(dieLoop)}
@@ -1045,10 +1060,14 @@ function settle(){V.touched=true;V.on=1;V.t=performance.now();V.acc=0;S[18]=0;S[
 const r=()=>(Math.random()<.5?-1:1)*(9+Math.random()*8);S[2]=Math.max(S[2],.58);S[3]=S[4]=0;S[5]=6;S[6]=r();S[7]=r();S[8]=(Math.random()*2-1)*6;V.netLaunchState=Array.from(S);
 if(canControlDie())V.armed=true;requestAnimationFrame(dieLoop)}
 function gup(e){delete TP[e.pointerId];const g=G_;if(!g||e.pointerId!=g.id)return;G_=null;
-if(!g.drag){if(performance.now()-g.s[0][0]>400){settle();return}const a=Math.atan2(g.y0-g.cy,g.x0-g.cx),k=((Math.round(a/(Math.PI/4))%8)+8)%8,d=SECT[k];launch(d[0],d[1],13+Math.random()*8,0,[45,.35]);return}
+/* как в локальной версии: короткий тап — бросок в сторону сектора; долгое удержание — settle только если наш ход */
+if(!g.drag){
+ if(performance.now()-g.s[0][0]>400){if(canControlDie())settle();return}
+ const a=Math.atan2(g.y0-g.cy,g.x0-g.cx),k=((Math.round(a/(Math.PI/4))%8)+8)%8,d=SECT[k];
+ launch(d[0],d[1],13+Math.random()*8,0,[45,.35]);return}
 const now=performance.now(),a=g.s.filter(q=>now-q[0]<100),f=a[0]||g.s[g.s.length-1],l=g.s[g.s.length-1],dt=Math.max((l[0]-f[0])/1000,.016);
 const vx=(l[1]-f[1])/dt/V.s,vy=(l[2]-f[2])/dt/V.s,sp=Math.hypot(vx,vy);V.on=0;
-if(sp<4){settle();return}
+if(sp<4){S[2]=.5;S[3]=S[4]=S[5]=S[6]=S[7]=S[8]=0;draw();return}
 launch(vx/sp,vy/sp,Math.min(sp,VMAX),0,[18,.18])}
 board.addEventListener('pointerup',gup);board.addEventListener('pointercancel',gup);board.addEventListener('lostpointercapture',gup);
 function onMotion(e){let a=e.acceleration,ax,ay;if(a&&a.x!=null){ax=a.x;ay=a.y}else{const g=e.accelerationIncludingGravity;if(!g)return;V.lp.x+=.15*(g.x-V.lp.x);V.lp.y+=.15*(g.y-V.lp.y);ax=g.x-V.lp.x;ay=g.y-V.lp.y}
@@ -1070,7 +1089,7 @@ const swEl=$('#sw');
 function refreshSw(){if(netMode&&!started){renderLobbySeats();return;}fixDup();swEl.innerHTML='';clearMarks();setSeatCols(np);for(let i=0;i<np;i++){const b=document.createElement('button');b.style.background=COL[i];b.onclick=()=>openPal(i);swEl.appendChild(b)}}
 function openPal(i){const o=document.createElement('div');o.id='pal';const used=new Set(COL.slice(0,np).map((c,k)=>k!=i?fam(c):null));
 o.innerHTML='<div class="card"><div class="t"><span style="color:'+COL[i]+'">●</span> 🎨</div><div class="g"></div></div>';const g=o.querySelector('.g');
-PAL.forEach(c=>{const b=document.createElement('button');b.style.background=c;if(used.has(fam(c)))b.disabled=true;if(nzc(COL[i])==c)b.className='cur';b.onclick=()=>{const seat=started&&networkPlayers[i]?networkPlayers[i].seat:(memberList[i]?memberList[i].seat:i);if(netMode&&seat!==mySeat)return;COL[i]=c;o.remove();refreshSw();if(netMode&&roomRef)roomRef.child('settings/colors/'+seat).set(c).catch(e=>reportFirebase('🎨',e));};g.appendChild(b)});
+PAL.forEach(c=>{const b=document.createElement('button');b.style.background=c;if(used.has(fam(c)))b.disabled=true;if(nzc(COL[i])==c)b.className='cur';b.onclick=()=>{const seat=started&&networkPlayers[i]?Number(networkPlayers[i].seat):(memberList[i]?Number(memberList[i].seat):i);if(netMode&&Number(seat)!==Number(mySeat)&&!(isHost&&Number(seat)===Number(mySeat)))return;COL[i]=c;o.remove();refreshSw();if(netMode&&roomRef)roomRef.child('settings/colors/'+seat).set(c).catch(e=>{reportFirebase('🎨',e);showRoomToast('🎨⚠️',3500);});};g.appendChild(b)});
 o.onclick=e=>{if(e.target===o)o.remove()};document.body.appendChild(o)}
 $('#pm').onclick=()=>{if(netMode){if(isHost&&!started)closeLastVacantSeat();return;}np=Math.max(2,np-1);$('#pn').textContent=np;refreshSw()};$('#pp').onclick=()=>{if(netMode){if(isHost&&!started)reopenSeat();return;}np=Math.min(5,np+1);$('#pn').textContent=np;refreshSw()};
 refreshSw();
@@ -1156,7 +1175,7 @@ const last=pos,j=last==99?null:J[last],dest=j?j[0]:last;p.st.n++;p.st.v[roll-1]+
 p.anim=new Promise(r=>p._r=r);
 for(let k=0;k<path.length;k++){
 if(k==path.length-1){if(GR[dest]&&!j)failSnd();if(last==99)fin(i);else{if(GR[dest])p.skip=1;next()}} /* как только фишка шагнула на последнюю клетку — сразу ход следующего */
-setPos(p,i,path[k]);relayout();stepSnd();await sleep(POS_DT)}
+setPos(p,i,path[k]);relayout();stepSnd();await sleep(netMode?Math.max(90,POS_DT):300)}
 if(j){p.jmp=true;await jump(p,i,last,j[0],j[1],j[2]);setPos(p,i,j[0]);p.jmp=false;relayout();if(GR[dest])failSnd()}
 leaders();p._r();p.anim=null}
 function next(){let g=0;do{cur=TO[(TO.indexOf(cur)+1)%TO.length];const q=P[cur];if(q.done)continue;
