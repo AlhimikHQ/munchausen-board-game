@@ -85,13 +85,15 @@ test('multiplayer transactions touch only the small state node and retry an empt
   assert.ok(!source.includes('roomTransaction('));
 });
 
-test('network dice replay and pawn movement run concurrently after the initial draw', () => {
+test('network dice replay then pawn movement use original timings and final sync', () => {
   assert.ok(source.includes('async function playNetTurn(event)'));
   assert.ok(source.includes("if(mode==='draw'){"));
-  assert.ok(source.includes('await Promise.all([replayNetDice(event),play(Number(event.roll))])'));
+  assert.ok(source.includes('await replayNetDice(event)'));
+  assert.ok(source.includes('await play(Number(event.roll))'));
   assert.ok(source.includes('function playInstant(roll)'));
   assert.ok(source.includes('playInstant(Number(request.roll))'));
   assert.ok(source.includes('await playNetTurn(event)'));
+  assert.ok(source.includes('финальная синхронизация') || source.includes('event.diceState'));
   assert.ok(source.includes('async function processHostOwnRoll'));
   assert.ok(source.includes('roomAnimationPending=true;'));
   assert.ok(source.includes('roomAnimationPending=false;'));
