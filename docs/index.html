@@ -276,8 +276,17 @@ function startPresenceHeartbeat(){
  if(presenceHeartbeatTimer)clearInterval(presenceHeartbeatTimer);
  if(!roomRef||!fbUser)return;
  const presenceRef=roomRef.child('members/'+fbUser.uid);
- const heartbeat=()=>presenceRef.update({connected:true,lastSeenAt:Date.now()}).catch(e=>reportFirebase('📡',e));
- heartbeat();presenceHeartbeatTimer=setInterval(heartbeat,30000);
+ const heartbeat=()=>{
+  if(document.visibilityState==='hidden'){
+   /* В фоне браузер/WebView троттлит таймеры — только lastSeen, без шума */
+   presenceRef.update({lastSeenAt:Date.now()}).catch(()=>{});
+   return;
+  }
+  presenceRef.update({connected:true,lastSeenAt:Date.now()}).catch(e=>reportFirebase('📡',e));
+ };
+ heartbeat();
+ /* 15с — чаще, чтобы после фона быстрее считаться online; cleanup host TTL = 5 мин */
+ presenceHeartbeatTimer=setInterval(heartbeat,15000);
 }
 function stopPresenceHeartbeat(){if(presenceHeartbeatTimer){clearInterval(presenceHeartbeatTimer);presenceHeartbeatTimer=0;}}
 function makeTurnToken(seq,uid){const nonce=window.crypto&&crypto.randomUUID?crypto.randomUUID():Math.random().toString(36).slice(2)+Date.now().toString(36);return String(seq)+':'+String(uid||'none')+':'+nonce;}
@@ -438,7 +447,10 @@ function roomRootData(){
 /* Автоудаление: создатель регистрирует на сервере onDisconnect().remove() для всей комнаты — как только он выходит
    (закрыл вкладку/приложение, пропала связь), Firebase сам удаляет комнату, а у остальных игроков срабатывает roomClosedByHost(). */
 async function armRoomDisconnect(ref,uid,host){
- if(host){await ref.onDisconnect().remove();return;}
+ /* Не вызываем onDisconnect().remove() для хоста: при сворачивании WebView/вкладки
+    Firebase кратко рвёт сокет и удалял всю комнату. Удаление — только явный выход хоста.
+    onDisconnect лишь помечает участника offline; серверный cleanup чистит комнату через ~5 мин. */
+ try{await ref.onDisconnect().cancel();}catch(e){}
  await ref.child('members/'+uid).onDisconnect().update({connected:false,ready:false,lastSeenAt:firebase.database.ServerValue.TIMESTAMP});
 }
 function roomClosedByHost(){
@@ -972,15 +984,26 @@ async function restoreSavedRoom(){
 }
 async function restoreRoomConnection(){
  const ref=roomRef,uid=fbUser&&fbUser.uid,host=isHost;if(!ref||!uid||!netMode)return;
- const meta=(await ref.child('meta').once('value')).val();if(!meta){roomClosedByHost();return;}
- const memberRef=ref.child('members/'+uid),member=await memberRef.once('value');
- if(!member.exists()){leaveNetworkSetup(false);showRoomToast('👤⏱',6000);return;}
- await memberRef.update({connected:true,lastSeenAt:Date.now()});
- await armRoomDisconnect(ref,uid,host);
- startPresenceHeartbeat();
- await recoverStaleProcessingLock();scheduleStaleLockRecovery();
- const state=(await ref.child('state').once('value')).val();
- if(state&&started&&Number(state.seq)>lastEvent+1)await recoverRoomSnapshot();
+ try{
+  const meta=(await ref.child('meta').once('value')).val();if(!meta){roomClosedByHost();return;}
+  roomMeta=meta;
+  const memberRef=ref.child('members/'+uid),member=await memberRef.once('value');
+  if(!member.exists()){leaveNetworkSetup(false);showRoomToast('👤⏱',6000);return;}
+  await memberRef.update({connected:true,lastSeenAt:Date.now()});
+  await armRoomDisconnect(ref,uid,host);
+  startPresenceHeartbeat();
+  /* если listeners снялись — повесить заново */
+  if(!roomListeners.length){watchMembers();watchRoomState();}
+  await recoverStaleProcessingLock();scheduleStaleLockRecovery();
+  const state=(await ref.child('state').once('value')).val();
+  if(!state){roomClosedByHost();return;}
+  roomTurnToken=state.turnToken||roomTurnToken;roomExpectedUid=state.activeUid||roomExpectedUid;
+  if(state.status==='started'&&!started)startNetworkGame(state.players||[],state.snapshot||null,Number(state.seq)||0,state.turnToken,state.activeUid);
+  else if(state.status==='started'&&started){
+   if(Number(state.seq)>lastEvent+1)await recoverRoomSnapshot();
+   else if(state.snapshot){applyNetSnapshot(state.snapshot);if(Array.isArray(state.snapshot.diceState)&&state.snapshot.diceState.length===24){S.set(state.snapshot.diceState);V.on=0;draw();}}
+  }
+ }catch(e){reportFirebase('🔄',e);}
 }
 async function leaveNetworkSetup(persist=true){
  const ref=roomRef,uid=fbUser&&fbUser.uid,host=isHost,seat=mySeat,active=netMode;
@@ -1022,8 +1045,41 @@ document.querySelector('#joinDice').addEventListener('click',event=>{const die=e
 document.querySelector('#joinDice').addEventListener('pointerdown',event=>{const die=event.target.closest('button[data-die]');if(die)diePointer={index:+die.dataset.die,y:event.clientY};});
 addEventListener('pointerup',event=>{if(!diePointer)return;const d=diePointer;diePointer=null;const dy=event.clientY-d.y;if(Math.abs(dy)>12){lastDieSwipe=performance.now();changeJoinDie(d.index,dy<0?1:-1);}});
 addEventListener('pointercancel',()=>{diePointer=null;});
-addEventListener('pagehide',e=>{if(e.persisted||!netMode||!isHost||!roomRef)return;try{roomRef.remove();}catch(err){}});
-document.addEventListener('visibilitychange',()=>{if(document.visibilityState!=='visible'||!netMode||!roomRef||!fbUser)return;roomRef.child('members/'+fbUser.uid).update({connected:true,lastSeenAt:Date.now()}).catch(()=>{});});
+/* pagehide больше не удаляет комнату — на Android/iOS это срабатывает при сворачивании */
+addEventListener('pagehide',e=>{if(!netMode||!roomRef||!fbUser)return;try{roomRef.child('members/'+fbUser.uid).update({lastSeenAt:Date.now()}).catch(()=>{});}catch(err){}});
+document.addEventListener('visibilitychange',()=>{
+ if(!netMode||!roomRef||!fbUser)return;
+ if(document.visibilityState==='hidden'){
+  /* Сворачивание: мягкий offline-хук, без удаления комнаты */
+  try{
+   roomRef.child('members/'+fbUser.uid).update({lastSeenAt:Date.now()}).catch(()=>{});
+   armRoomDisconnect(roomRef,fbUser.uid,isHost).catch(()=>{});
+  }catch(err){}
+  return;
+ }
+ /* Возврат на экран: восстановить presence, listeners, snapshot */
+ (async()=>{
+  try{
+   await roomRef.child('members/'+fbUser.uid).update({connected:true,lastSeenAt:Date.now()});
+   await armRoomDisconnect(roomRef,fbUser.uid,isHost);
+   startPresenceHeartbeat();
+   if(connectionState===false)await restoreRoomConnection();
+   else{
+    await recoverStaleProcessingLock().catch(()=>{});
+    if(started){
+     const state=(await roomRef.child('state').once('value')).val();
+     if(state&&Number(state.seq)>lastEvent)await recoverRoomSnapshot().catch(()=>{});
+     else if(state&&Array.isArray(state.snapshot&&state.snapshot.diceState?state.snapshot.diceState:null)){/* keep */}
+     if(state&&Number(state.seq)>=lastEvent){
+      roomTurnToken=state.turnToken||roomTurnToken;roomExpectedUid=state.activeUid||roomExpectedUid;
+      if(state.snapshot)applyNetSnapshot(state.snapshot);
+      if(Array.isArray(state.snapshot&&state.snapshot.diceState)&&state.snapshot.diceState.length===24){S.set(state.snapshot.diceState);V.on=0;draw();}
+     }
+    }
+   }
+  }catch(e){reportFirebase('👁',e);}
+ })();
+});
 
 
 /* Случайность: из физически возможных вариантов броска (небольшой разброс угла и силы) выбирается тот, после которого
