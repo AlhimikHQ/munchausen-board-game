@@ -138,7 +138,9 @@ test('reconnect, gap recovery and subscription disposal are implemented', () => 
 test('the room is deleted automatically when its creator leaves', () => {
   // the host registers a server-side removal of the whole room right after creating it
   assert.ok(source.includes('async function armRoomDisconnect(ref,uid,host)'));
-  assert.ok(source.includes('if(host){await ref.onDisconnect().remove();return;}'));
+  assert.ok(source.includes('onDisconnect().cancel()'));
+  assert.ok(source.includes("onDisconnect().update({connected:false"));
+  assert.ok(!source.includes('if(host){await ref.onDisconnect().remove();return;}'));
   assert.ok(source.includes('await armRoomDisconnect(roomRef,fbUser.uid,true);'));
   // and re-registers it after a reconnect or a restored session
   assert.ok(source.includes('await armRoomDisconnect(ref,uid,host);'));
@@ -148,6 +150,8 @@ test('the room is deleted automatically when its creator leaves', () => {
   assert.ok(source.includes('if(!roomMeta){roomClosedByHost();return;}'));
   assert.ok(source.includes('if(!state){roomClosedByHost();return;}'));
   assert.ok(source.includes("host?'📡❌':'🏠❌'"));
+  assert.ok(source.includes("visibilitychange"));
+  assert.ok(source.includes('visibilityState'));
   // closing the page deletes the room immediately, a manual exit removes it first and only then cancels the handler
   assert.ok(source.includes("addEventListener('pagehide'"));
   assert.ok(source.includes('try{await ref.remove();removed=true;}'));
