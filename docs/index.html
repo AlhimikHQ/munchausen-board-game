@@ -10,8 +10,8 @@ button{font:inherit;padding:8px 14px;border-radius:10px;border:1px solid var(--l
 #boardw{position:relative;order:1;flex:1 1 0;min-height:0;width:100%;display:flex;align-items:flex-start;justify-content:center}
 #board{position:relative;flex:none;box-sizing:border-box;background:var(--cell);border:3px solid #c0202a;overflow:hidden;touch-action:none}
 .tok,.veh,.trl{position:absolute;pointer-events:none}.tok,.veh{transform:translate(-50%,-50%)}
-.tok{z-index:4;width:3.5%;aspect-ratio:1;box-sizing:border-box;border-radius:50%;border:1.5px solid #fff;box-shadow:0 0 0 1px #000;transition:left .3s,top .3s,opacity .6s}
-.veh{z-index:5;font-size:clamp(20px,6vw,38px);transition:left 1s ease-in-out,top 1s ease-in-out,opacity .6s}
+.tok{z-index:4;width:3.5%;aspect-ratio:1;box-sizing:border-box;border-radius:50%;border:1.5px solid #fff;box-shadow:0 0 0 1px #000;transition:left 66ms linear,top 66ms linear,opacity .6s}
+.veh{z-index:5;font-size:clamp(20px,6vw,38px);transition:left .45s ease-in-out,top .45s ease-in-out,opacity .45s}
 .trl{width:3.3%;aspect-ratio:1;border-radius:50%;transform:translate(-50%,-50%);opacity:.7;z-index:2;animation:tf .8s forwards}@keyframes tf{to{opacity:0;transform:translate(-50%,-50%) scale(.2)}}
 .tok.act::before{content:'';position:absolute;inset:-40%;border-radius:50%;background:conic-gradient(from 0deg,transparent 0%,var(--c) 45%,color-mix(in srgb,var(--c) 35%,#fff) 80%,transparent 100%);-webkit-mask:radial-gradient(farthest-side,transparent calc(100% - 4px),#000 calc(100% - 3px));mask:radial-gradient(farthest-side,transparent calc(100% - 4px),#000 calc(100% - 3px));animation:rot 1.4s linear infinite;pointer-events:none}@keyframes rot{to{transform:rotate(360deg)}}
 #vl{position:absolute;inset:0;pointer-events:none;z-index:15}
@@ -80,6 +80,8 @@ const J={5:[9,'ride','🐎'],11:[15,'ride','🏇'],17:[50,'fly','🦆'],23:[47,'
 21:[3,'fall','⛪'],36:[18,'fall','💦'],48:[22,'fall','🏰'],50:[25,'fall','🦆'],62:[26,'fall','🧗'],60:[58,'fall','🐋'],72:[67,'fall','🌊'],79:[57,'fall','☄️'],92:[59,'fall','🦅']};
 const GR={41:1,98:1}; // зелёные кружки: пропуск одного хода
 const $=s=>document.querySelector(s),sleep=ms=>new Promise(r=>setTimeout(r,ms));
+const POS_HZ=15,POS_DT=1000/POS_HZ; /* частота обновления позиций фишек */
+
 const board=$('#board');let P=[],cur=0,busy=false,over=false;
 function xy(n){if(!n)return[0,11];let r=(n-1)/9|0,c=(n-1)%9;if(r%2)c=8-c;return[c,10-r]}
 
@@ -92,7 +94,7 @@ function seatFor(i,pos){const u=new Set();P.forEach((q,k)=>{if(k!=i&&q.pos==pos)
 function setPos(p,i,pos){p.pos=pos;p.seat=seatFor(i,pos)}
 function slot(i,pos){const q=P[i],sd=Math.min(4,q.pos==pos&&q.seat!=null?q.seat:seatFor(i,pos)),[ux,uy]=SEATQ[sd],[c,rw]=xy(pos),x0=GX[c],x1=GX[c+1],y0=5.5+117.5*rw;return[(x0+(x1-x0)*ux/108.7)/10,(y0+uy)/(TH/100)]}
 const pt=(n,i)=>slot(i,n);
-function relayout(){P.forEach((q,k)=>{if(q.jmp)return;const[l,t]=slot(k,q.pos);q.e.style.left=l+'%';q.e.style.top=t+'%'})}
+function relayout(instant){P.forEach((q,k)=>{if(q.jmp)return;const[l,t]=slot(k,q.pos);if(instant){q.e.style.transition='none';}q.e.style.left=l+'%';q.e.style.top=t+'%';if(instant){void q.e.offsetWidth;q.e.style.transition='';}})}
 const DS=.0935,Wu=1/DS,Hu=1.316/DS,SX=Wu/2,G=60,I1=6,DU=1e9,HH=1/120,KA=1,KB=1,NK=15,AD=0,VMAX=26,CQ=.07,CWR=.05,SK=1.35,YAW=7;
 const VAL=[1,6,3,4,2,5],PP={1:[4],2:[0,8],3:[0,4,8],4:[0,2,6,8],5:[0,2,4,6,8],6:[0,2,3,5,6,8]};
 const FT=['','rotateY(180deg)','rotateY(90deg)','rotateY(-90deg)','rotateX(90deg)','rotateX(-90deg)'];
@@ -195,6 +197,8 @@ function failSnd(){if(!AC)return;const L=LV.fail;[[311,0,.22],[294,.26,.22],[277
 addEventListener('pointerdown',audioInit);
 
 const awaiting=()=>started&&!busy&&!over&&!roomAnimationPending&&!P.some(p=>p.anim);
+/* В сети кубиком управляет только игрок, чей сейчас ход (activeUid). */
+const canControlDie=()=>{if(!awaiting())return false;if(!netMode)return true;return !!(fbUser&&roomExpectedUid===fbUser.uid&&!roomProcessing);};
 /* Firebase multiplayer: host validates turns and publishes authoritative dice results. */
 const firebaseConfig={apiKey:"AIzaSyClRq2KotMI-ajRV_pWGG2t1eqRYKy6Q_I",authDomain:"board-games-n1.firebaseapp.com",databaseURL:"https://board-games-n1-default-rtdb.europe-west1.firebasedatabase.app",projectId:"board-games-n1",storageBucket:"board-games-n1.firebasestorage.app",messagingSenderId:"797191791563",appId:"1:797191791563:web:4f1c5ce0acaf15ceb24c4e"};
 const FIREBASE_SCHEMA=3,ROOM_EVENT_LIMIT=64,ROOM_STALE_MEMBER_MS=2*60*1000,ROOM_STORAGE_KEY='munchausen.room.v3';
@@ -639,7 +643,7 @@ function applyNetSnapshot(snapshot){
  (snapshot.players||[]).forEach((v,i)=>{if(!P[i])return;P[i].skip=v.skip||0;P[i].done=v.done||0;P[i].pend=v.pend||0;P[i].st=v.st||P[i].st;
   setPos(P[i],i,v.pos||1);if(Number.isInteger(v.seat))P[i].seat=v.seat;P[i].e.style.background=COL[i];P[i].e.style.setProperty('--c',COL[i]);});
  if(Array.isArray(snapshot.diceState)&&snapshot.diceState.length===24&&!V.on){S.set(snapshot.diceState);draw();}
- relayout();if(over){busy=false;act(-1);}else{busy=false;act(mode==='draw'?(dl[di]??0):cur);}
+ relayout(true);if(over){busy=false;act(-1);}else{busy=false;const ai=mode==='draw'?(dl[di]??0):cur;act(ai);if(!over)showTurnBanner(ai);}
 }
 function simulateDiceState(launchState){
  if(!Array.isArray(launchState)||launchState.length!==24||!launchState.every(Number.isFinite))return null;
@@ -745,7 +749,7 @@ async function processHostOwnRoll(roll,launchState,diceState){
   if(seq>ROOM_EVENT_LIMIT)updates['events/'+String(seq-ROOM_EVENT_LIMIT).padStart(12,'0')]=null;
   await roomRef.update(updates);
   roomSeq=seq;lastEvent=seq;roomTurnToken=nextToken;roomExpectedUid=activeUid;roomProcessing=false;
-  banner(mode==='draw'?' ':'● 🎲',activePlayerIndex(snapshot),mode==='draw'?400:0);
+  if(!over)showTurnBanner(activePlayerIndex(snapshot));
  }catch(e){
   if(beforeSnapshot&&started){applyNetSnapshot(beforeSnapshot);if(beforeDice)S.set(beforeDice);}
   if(claimed){try{await releaseProcessingLock(requestId);}catch(ignore){}}
@@ -755,8 +759,9 @@ async function processHostOwnRoll(roll,launchState,diceState){
 async function runNetEvent(event){
  if(event&&event.type==='skip'){
   roomAnimationPending=true;
-  try{banner('● ⏭',Number(event.skipped)||0,900);if(event.snapshot)applyNetSnapshot(event.snapshot);}finally{roomAnimationPending=false;}
+  try{banner('● ⏭',Number(event.skipped)||0,Math.round(POS_DT*4));if(event.snapshot)applyNetSnapshot(event.snapshot);}finally{roomAnimationPending=false;}
   roomSeq=Number(event.seq)||roomSeq;roomTurnToken=event.turnToken||roomTurnToken;roomExpectedUid=event.activeUid||roomExpectedUid;
+  if(!over)showTurnBanner(mode==='draw'?(dl[di]??0):cur);
   return;
  }
  if(!event||event.type!=='roll'||!Number.isInteger(Number(event.roll)))return;
@@ -768,6 +773,7 @@ async function runNetEvent(event){
   roomAnimationPending=false;
  }
  roomSeq=Number(event.seq)||roomSeq;roomTurnToken=event.turnToken||roomTurnToken;roomExpectedUid=event.activeUid||roomExpectedUid;
+ if(!over)showTurnBanner(mode==='draw'?(dl[di]??0):cur);
 }
 async function recoverRoomSnapshot(){
  if(!roomRef||!netMode||!started)return;const state=(await roomRef.child('state').once('value')).val();
@@ -898,8 +904,7 @@ async function processRollRequest(request,requestId){
   if(seq>ROOM_EVENT_LIMIT)updates['events/'+String(seq-ROOM_EVENT_LIMIT).padStart(12,'0')]=null;
   await roomRef.update(updates);
   roomSeq=seq;lastEvent=seq;roomTurnToken=turnToken;roomExpectedUid=activeUid;roomProcessing=false;
-  /* лёгкая подсветка на экране хоста (полная анимация уже у гостей) */
-  if(request.uid!==(fbUser&&fbUser.uid))banner('● 🎲',nextIndex,0);
+  if(!over)showTurnBanner(nextIndex);
  }catch(e){
   if(beforeSnapshot&&started){applyNetSnapshot(beforeSnapshot);if(beforeDice)S.set(beforeDice);}
   if(claimed){try{await releaseProcessingLock(requestId);}catch(ignore){}}
@@ -1015,7 +1020,7 @@ REC=true;const rest=steps>0&&runSteps(S,steps);REC=false;if(IG>1.5){tapSnd(IG,0)
 function snapFlat(){let k=0;if(Math.abs(S[16])>Math.abs(S[15+k]))k=1;if(Math.abs(S[17])>Math.abs(S[15+k]))k=2;const sg=S[15+k]>0?1:-1,nx=sg*S[9+k],ny=sg*S[12+k],nz=sg*S[15+k],ang=Math.acos(Math.min(1,nz)),am=Math.hypot(ny,nx);
 if(am>1e-9){const R=mmul(rodr([ny/am,-nx/am,0],ang),Array.from(S.subarray(9,18)));S.set(R,9)}
 S[2]=.5;S[3]=S[4]=S[5]=S[6]=S[7]=S[8]=0;S[20]=-1;V.on=0;job=null;const val=topVal(S);V.target=0;draw();dieRest(val)}
-function dieRest(val){if(remoteDiceResolve){const done=remoteDiceResolve;done();return}if(V.armed&&awaiting()){V.armed=false;if(netMode){if(isHost&&fbUser&&roomExpectedUid===fbUser.uid&&!roomProcessing)processHostOwnRoll(val,V.netLaunchState,Array.from(S)).catch(e=>reportFirebase('🎲',e));else netRoll(val,V.netLaunchState,Array.from(S));}else play(val)}else V.armed=false}
+function dieRest(val){if(remoteDiceResolve){const done=remoteDiceResolve;done();return}if(V.armed&&canControlDie()){V.armed=false;if(netMode){if(isHost&&fbUser&&roomExpectedUid===fbUser.uid&&!roomProcessing)processHostOwnRoll(val,V.netLaunchState,Array.from(S)).catch(e=>reportFirebase('🎲',e));else netRoll(val,V.netLaunchState,Array.from(S));}else play(val)}else V.armed=false}
 function initMotion(){const en=()=>addEventListener('devicemotion',onMotion);if(typeof DeviceMotionEvent!='undefined'&&DeviceMotionEvent.requestPermission)DeviceMotionEvent.requestPermission().then(r=>{if(r=='granted')en()}).catch(()=>{});else en()}
 let G_=null;const TP={};
 const hitDie=(x,y,m=14)=>{const r=cube.getBoundingClientRect();return x>r.left-m&&x<r.right+m&&y>r.top-m&&y<r.bottom+m};
@@ -1026,6 +1031,7 @@ const nx=Math.min(Wu-.5,Math.max(.5,(e.clientX-g.ox)/s)),ny=Math.min(Hu-.5,Math.
 if(g.moved&&dd>1e-4)S.set(mmul(rodr([-dy/dd,dx/dd,0],dd*Math.PI/2),Array.from(S.subarray(9,18))),9);g.moved=true;
 S[0]=nx;S[1]=ny;S[2]=.55;clampIn();draw()}
 board.addEventListener('pointerdown',e=>{if(G_)return;if(!hitDie(e.clientX,e.clientY)){TP[e.pointerId]={t:performance.now(),x:e.clientX,y:e.clientY,vx:0,vy:0};return}
+if(!canControlDie())return;
 e.preventDefault();board.setPointerCapture(e.pointerId);const r=board.getBoundingClientRect(),c=cube.getBoundingClientRect();
 G_={id:e.pointerId,ox:r.left+board.clientLeft,oy:r.top+board.clientTop,x0:e.clientX,y0:e.clientY,cx:c.left+c.width/2,cy:c.top+c.height/2,drag:false,s:[[performance.now(),e.clientX,e.clientY]]}});
 board.addEventListener('pointermove',e=>{if(G_&&e.pointerId==G_.id){const g=G_;
@@ -1033,11 +1039,11 @@ if(!g.drag){if(Math.hypot(e.clientX-g.x0,e.clientY-g.y0)<9)return;g.drag=true;V.
 gmove(e);return}
 const q=TP[e.pointerId];if(!q)return;const now=performance.now(),dt=Math.max((now-q.t)/1000,.008);
 q.vx=q.vx*.5+(e.clientX-q.x)/dt/V.s*.5;q.vy=q.vy*.5+(e.clientY-q.y)/dt/V.s*.5;q.t=now;q.x=e.clientX;q.y=e.clientY;const sp=Math.hypot(q.vx,q.vy);
-if(sp>8&&now-V.hitT>250&&V.on!=3&&hitDie(e.clientX,e.clientY,6)){V.hitT=now;launch(q.vx/sp,q.vy/sp,Math.min(sp,VMAX)*.9,0,[18,.18])}});
+if(sp>8&&now-V.hitT>250&&V.on!=3&&hitDie(e.clientX,e.clientY,6)&&canControlDie()){V.hitT=now;launch(q.vx/sp,q.vy/sp,Math.min(sp,VMAX)*.9,0,[18,.18])}});
 /* кубик отпустили без броска: он подпрыгивает, проворачивается на месте и падает на грань — на ребре или в воздухе он не остаётся никогда */
 function settle(){V.touched=true;V.on=1;V.t=performance.now();V.acc=0;S[18]=0;S[19]=0;S[20]=-1;job=null;V.target=0;
 const r=()=>(Math.random()<.5?-1:1)*(9+Math.random()*8);S[2]=Math.max(S[2],.58);S[3]=S[4]=0;S[5]=6;S[6]=r();S[7]=r();S[8]=(Math.random()*2-1)*6;V.netLaunchState=Array.from(S);
-if(awaiting())V.armed=true;requestAnimationFrame(dieLoop)}
+if(canControlDie())V.armed=true;requestAnimationFrame(dieLoop)}
 function gup(e){delete TP[e.pointerId];const g=G_;if(!g||e.pointerId!=g.id)return;G_=null;
 if(!g.drag){if(performance.now()-g.s[0][0]>400){settle();return}const a=Math.atan2(g.y0-g.cy,g.x0-g.cx),k=((Math.round(a/(Math.PI/4))%8)+8)%8,d=SECT[k];launch(d[0],d[1],13+Math.random()*8,0,[45,.35]);return}
 const now=performance.now(),a=g.s.filter(q=>now-q[0]<100),f=a[0]||g.s[g.s.length-1],l=g.s[g.s.length-1],dt=Math.max((l[0]-f[0])/1000,.016);
@@ -1124,9 +1130,17 @@ function dieIso(){const pip=(x,y,c)=>'<circle cx="'+x+'" cy="'+y+'" r=".105" fil
 return'<svg viewBox="0 0 100 100"><path d="M50 0L93.3 25L50 50L6.7 25Z" fill="#fff"/><path d="M6.7 25L50 50L50 100L6.7 75Z" fill="#dcdcdc"/><path d="M50 50L93.3 25L93.3 75L50 100Z" fill="#b9b9b9"/>'
 +g('43.3 25 -43.3 25 50 0',pip(.5,.5,'#c0202a').replace('.105','.13'))+g('43.3 25 0 50 6.7 25',pip(.27,.27)+pip(.73,.73))+g('43.3 -25 0 50 50 50',pip(.27,.27)+pip(.5,.5)+pip(.73,.73))
 +'<path d="M50 0L93.3 25L93.3 75L50 100L6.7 75L6.7 25Z M6.7 25L50 50L93.3 25 M50 50L50 100" fill="none" stroke="#000" stroke-width="2.6" stroke-linejoin="round" stroke-linecap="round"/></svg>'}
-function bnHTML(t,i){if(t.indexOf('● ')==0){const r=t.slice(2);return bk(i,r.indexOf('🎲')>=0?'<span class="bdie">'+dieIso()+'</span>':'<span class="bsy">'+r+'</span>')}return bk(i,'<span class="bsy">'+t+'</span>',1)}
+function bnHTML(t,i){if(t.indexOf('● ')==0){const r=t.slice(2);if(r.indexOf('🎲')>=0){ const mine=!netMode||(fbUser&&roomExpectedUid===fbUser.uid); return bk(i,mine?'<span class="bdie">'+dieIso()+'</span>':'<span class="bsy">🎲</span>',!mine);}return bk(i,'<span class="bsy">'+r+'</span>')}return bk(i,'<span class="bsy">'+t+'</span>',1)}
+function showTurnBanner(i){
+ /* Подсветка кубика только цветом текущего игрока; интерактивная кость — только если это наш ход. */
+ if(i==null||i<0||over)return;
+ const idx=Number(i)||0;
+ banner('● 🎲',idx);
+ act(idx);
+}
 function banner(t,i,hold,h){const now=Date.now();if(now<bHold){bQ.push([t,i,hold,h]);return}
-if(h!=null)bn.innerHTML=h;else bn.innerHTML=bnHTML(t,i);bn.style.color=COL[i];bn.classList.remove('sh');void bn.offsetWidth;bn.classList.add('sh');
+const col=COL[Number.isInteger(i)?i:0]||COL[0];
+if(h!=null)bn.innerHTML=h;else bn.innerHTML=bnHTML(t,i);bn.style.color=col;bn.classList.remove('sh');void bn.offsetWidth;bn.classList.add('sh');
 if(hold){bHold=now+hold;setTimeout(()=>{bHold=0;while(bQ.length){const q=bQ.shift();banner(q[0],q[1],q[2],q[3]);if(q[2])break}},hold)}}
 function drawRoll(v){const i=dl[di];(DRES[i]=DRES[i]||[]).push(v);banner(' ',i,1100,bk(i,dieImg(v)));showDL();di++;
 if(di<dl.length){const k=dl[di];banner('● 🎲 ?',k);act(k);busy=false;return}
@@ -1142,13 +1156,13 @@ const last=pos,j=last==99?null:J[last],dest=j?j[0]:last;p.st.n++;p.st.v[roll-1]+
 p.anim=new Promise(r=>p._r=r);
 for(let k=0;k<path.length;k++){
 if(k==path.length-1){if(GR[dest]&&!j)failSnd();if(last==99)fin(i);else{if(GR[dest])p.skip=1;next()}} /* как только фишка шагнула на последнюю клетку — сразу ход следующего */
-setPos(p,i,path[k]);relayout();stepSnd();await sleep(300)}
+setPos(p,i,path[k]);relayout();stepSnd();await sleep(POS_DT)}
 if(j){p.jmp=true;await jump(p,i,last,j[0],j[1],j[2]);setPos(p,i,j[0]);p.jmp=false;relayout();if(GR[dest])failSnd()}
 leaders();p._r();p.anim=null}
 function next(){let g=0;do{cur=TO[(TO.indexOf(cur)+1)%TO.length];const q=P[cur];if(q.done)continue;
-if(q.skip){q.skip=0;q.st.sk++;banner('● ⏭',cur,900);continue}
+if(q.skip){q.skip=0;q.st.sk++;banner('● ⏭',cur,Math.round(POS_DT*4));continue}
 break}while(++g<30);
-busy=false;banner('● 🎲',cur);act(cur)}
+busy=false;showTurnBanner(cur)}
 const ORD=[];
 function fin(i){const p=P[i];p.done=ORD.push(i);if(p.done==1)fanfare();else if(p.done==2)fanfare2();else if(p.done==3)fanfare3();if(ORD.length==P.length-1){const l=P.findIndex(q=>!q.done);P[l].done=ORD.push(l)}
 leaders();
@@ -1157,7 +1171,7 @@ next()}
 
 const ROM=['I','II','III','IV','V'];
 /* нажатие по кубику в нижней надписи = нажатие по кубику на доске: кубик катится от места, где лежит, к центру доски */
-let tapT=0;addEventListener('pointerdown',e=>{const t=e.target;if(!(t&&t.closest&&t.closest('.bdie'))||!awaiting())return;e.preventDefault();const nw=Date.now();if(V.on||V.armed||nw-tapT<900)return;tapT=nw;
+let tapT=0;addEventListener('pointerdown',e=>{const t=e.target;if(!(t&&t.closest&&t.closest('.bdie'))||!canControlDie())return;e.preventDefault();const nw=Date.now();if(V.on||V.armed||nw-tapT<900)return;tapT=nw;
 const dx=Wu/2-S[0],dy=Hu*.45-S[1],m=Math.hypot(dx,dy);launch(m>.5?dx/m:0,m>.5?dy/m:-1,13+Math.random()*8,0,[45,.35])});
 
 /* ---- жребий: места вертикальным списком (римские цифры, цвет фишки, выпавшее число); строки плавно меняются местами ---- */
