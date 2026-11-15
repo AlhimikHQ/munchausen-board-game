@@ -714,16 +714,17 @@ function replayNetDice(event){
  });
 }
 /* Мгновенное применение хода без анимации — для авторитетной записи хоста, чтобы не блокировать следующий ход. */
-function playInstant(roll){
+function playInstant(roll,silent){
  if(!Number.isInteger(roll)||roll<1||roll>6||over)return;
  busy=true;V.armed=false;
+ const vis=!silent;
  if(mode==='draw'){
-  const i=dl[di];(DRES[i]=DRES[i]||[]).push(roll);showDL();di++;
-  if(di<dl.length){const k=dl[di];act(k);busy=false;return}
+  const i=dl[di];(DRES[i]=DRES[i]||[]).push(roll);if(vis)showDL();di++;
+  if(di<dl.length){const k=dl[di];if(vis)act(k);busy=false;return}
   const G={};Object.keys(DRES).forEach(k=>{const y=DRES[k].join();(G[y]=G[y]||[]).push(+k)});
   const tied=[].concat(...Object.values(G).filter(g=>g.length>1)).sort((a,b)=>a-b);
-  if(tied.length){dl=tied;di=0;act(tied[0]);busy=false;return}
-  TO=rankList();LB=[...TO];mode='play';cur=TO[0];busy=false;showDL(true);act(cur);return;
+  if(tied.length){dl=tied;di=0;if(vis)act(tied[0]);busy=false;return}
+  TO=rankList();LB=[...TO];mode='play';cur=TO[0];busy=false;if(vis){showDL(true);act(cur);}return;
  }
  const i=cur,p=P[i];
  let pos=p.pos,dir=1;const path=[];for(let k=0;k<roll;k++){pos+=dir;if(pos>99){pos=98;dir=-1}path.push(pos)}
@@ -731,15 +732,15 @@ function playInstant(roll){
  p.st.n++;p.st.v[roll-1]++;if(j){if(j[0]>last)p.st.up++;else p.st.dn++}
  if(last==99){
   p.done=ORD.push(i);if(ORD.length==P.length-1){const l=P.findIndex(q=>!q.done);if(l>=0)P[l].done=ORD.push(l)}
-  setPos(p,i,99);relayout();leaders();
-  if(ORD.length==P.length){over=true;busy=false;act(-1);return}
+  setPos(p,i,99);if(vis){relayout();leaders();}
+  if(ORD.length==P.length){over=true;busy=false;if(vis)act(-1);return}
   let g=0;do{cur=TO[(TO.indexOf(cur)+1)%TO.length];const q=P[cur];if(q.done)continue;if(q.skip){q.skip=0;q.st.sk++;continue}break}while(++g<30);
-  busy=false;act(cur);return;
+  busy=false;if(vis)act(cur);return;
  }
  if(GR[dest]&&!j)p.skip=1;
- setPos(p,i,dest);if(j)setPos(p,i,j[0]);relayout();leaders();
+ setPos(p,i,dest);if(j)setPos(p,i,j[0]);if(vis){relayout();leaders();}
  let g=0;do{cur=TO[(TO.indexOf(cur)+1)%TO.length];const q=P[cur];if(q.done)continue;if(q.skip){q.skip=0;q.st.sk++;continue}break}while(++g<30);
- busy=false;act(cur);
+ busy=false;if(vis)act(cur);
 }
 async function playNetTurn(event){
  /* всегда последовательно: сначала кубик, потом фишка — как в локальной версии */
@@ -763,7 +764,7 @@ async function processHostOwnRoll(roll,launchState,diceState){
   if(!claimed)return;
   roomProcessing=true;beforeSnapshot=makeNetSnapshot();beforeDice=Array.from(S);
   if(Array.isArray(diceState)&&diceState.length===24)S.set(diceState);
-  playInstant(Number(roll));
+  playInstant(Number(roll),true);
   if(!lockedState||!lockedState.processing||lockedState.processing.requestId!==requestId)throw new Error('Turn lock lost before commit');
   const seq=(Number(lockedState.seq)||0)+1,snapshot=makeNetSnapshot();snapshot.seq=seq;
   const nextIndex=activePlayerIndex(snapshot),activeUid=networkPlayers[nextIndex]&&networkPlayers[nextIndex].uid||'',nextToken=makeTurnToken(seq,activeUid),now=Date.now();
@@ -777,8 +778,6 @@ async function processHostOwnRoll(roll,launchState,diceState){
   await roomRef.update(updates);
   roomSeq=seq;lastEvent=seq;roomTurnToken=nextToken;roomExpectedUid=activeUid;roomProcessing=false;
   await runNetEvent(event);
-  if(event.snapshot)applyNetSnapshot(event.snapshot);
-  if(Array.isArray(event.diceState)&&event.diceState.length===24){S.set(event.diceState);V.on=0;V.armed=false;draw();}
   if(!over)showTurnBanner(nextIndex);
  }catch(e){
   if(beforeSnapshot&&started){applyNetSnapshot(beforeSnapshot);if(beforeDice)S.set(beforeDice);}
@@ -799,9 +798,21 @@ async function runNetEvent(event){
  roomAnimationPending=true;
  try{
   await playNetTurn(event);
-  /* финальная синхронизация: одни и те же позиции и кубик у всех клиентов */
-  if(event.snapshot)applyNetSnapshot(event.snapshot);
+  /* кубик — авторитетный diceState; фишки уже в финале после play(), snapshot без лишнего relayout */
   if(Array.isArray(event.diceState)&&event.diceState.length===24){S.set(event.diceState);V.on=0;V.armed=false;job=null;draw();}
+  if(event.snapshot){
+   /* подтянуть счётчики/очередь без дёрганья позиций, если pos совпали */
+   const sp=event.snapshot.players||[];
+   let needLayout=false;
+   sp.forEach((v,i)=>{if(!P[i])return;if(P[i].pos!==(v.pos||1))needLayout=true;});
+   if(needLayout)applyNetSnapshot(event.snapshot);
+   else{
+    mode=event.snapshot.mode||mode;dl=event.snapshot.dl||dl;di=event.snapshot.di||0;dr=event.snapshot.dr||dr;
+    cur=event.snapshot.cur||cur;TO=event.snapshot.TO||TO;DRES=event.snapshot.DRES||DRES;
+    ORD.splice(0,ORD.length,...(event.snapshot.ORD||ORD));over=!!event.snapshot.over;
+    (sp).forEach((v,i)=>{if(!P[i])return;P[i].skip=v.skip||0;P[i].done=v.done||0;P[i].st=v.st||P[i].st;if(Number.isInteger(v.seat))P[i].seat=v.seat;});
+   }
+  }
  }finally{
   roomAnimationPending=false;
  }
@@ -928,7 +939,7 @@ async function processRollRequest(request,requestId){
   /* Считаем авторитетный snapshot мгновенно, откатываем доску, публикуем событие —
      затем хост проигрывает ту же анимацию, что и гости (тайминги как в локальной версии). */
   if(Array.isArray(request.diceState)&&request.diceState.length===24)S.set(request.diceState);
-  playInstant(Number(request.roll));
+  playInstant(Number(request.roll),true);
   if(!lockedState||!lockedState.processing||lockedState.processing.requestId!==requestId||lockedState.processing.turnToken!==request.turnToken)throw new Error('Turn lock lost before commit');
   const seq=(Number(lockedState.seq)||0)+1,snapshot=makeNetSnapshot();snapshot.seq=seq;
   const nextIndex=activePlayerIndex(snapshot),activeUid=networkPlayers[nextIndex]&&networkPlayers[nextIndex].uid||'',turnToken=makeTurnToken(seq,activeUid),now=Date.now();
@@ -941,9 +952,6 @@ async function processRollRequest(request,requestId){
   await roomRef.update(updates);
   roomSeq=seq;lastEvent=seq;roomTurnToken=turnToken;roomExpectedUid=activeUid;roomProcessing=false;
   await runNetEvent(event);
-  /* жёсткая синхронизация конечного состояния (кубик + фишки) */
-  if(event.snapshot)applyNetSnapshot(event.snapshot);
-  if(Array.isArray(event.diceState)&&event.diceState.length===24){S.set(event.diceState);V.on=0;V.armed=false;draw();}
   if(!over)showTurnBanner(nextIndex);
  }catch(e){
   if(beforeSnapshot&&started){applyNetSnapshot(beforeSnapshot);if(beforeDice)S.set(beforeDice);}
@@ -1047,38 +1055,36 @@ addEventListener('pointerup',event=>{if(!diePointer)return;const d=diePointer;di
 addEventListener('pointercancel',()=>{diePointer=null;});
 /* pagehide больше не удаляет комнату — на Android/iOS это срабатывает при сворачивании */
 addEventListener('pagehide',e=>{if(!netMode||!roomRef||!fbUser)return;try{roomRef.child('members/'+fbUser.uid).update({lastSeenAt:Date.now()}).catch(()=>{});}catch(err){}});
+let _visResumeTimer=0;
 document.addEventListener('visibilitychange',()=>{
  if(!netMode||!roomRef||!fbUser)return;
  if(document.visibilityState==='hidden'){
-  /* Сворачивание: мягкий offline-хук, без удаления комнаты */
-  try{
-   roomRef.child('members/'+fbUser.uid).update({lastSeenAt:Date.now()}).catch(()=>{});
-   armRoomDisconnect(roomRef,fbUser.uid,isHost).catch(()=>{});
-  }catch(err){}
+  try{roomRef.child('members/'+fbUser.uid).update({lastSeenAt:Date.now()}).catch(()=>{});}catch(err){}
   return;
  }
- /* Возврат на экран: восстановить presence, listeners, snapshot */
- (async()=>{
+ /* Возврат: лёгкий presence сразу; тяжёлый sync — с задержкой и только если нужно */
+ try{roomRef.child('members/'+fbUser.uid).update({connected:true,lastSeenAt:Date.now()}).catch(()=>{});}catch(err){}
+ startPresenceHeartbeat();
+ if(_visResumeTimer)clearTimeout(_visResumeTimer);
+ _visResumeTimer=setTimeout(async()=>{
+  _visResumeTimer=0;
+  if(!netMode||!roomRef||!fbUser||document.visibilityState!=='visible')return;
   try{
-   await roomRef.child('members/'+fbUser.uid).update({connected:true,lastSeenAt:Date.now()});
    await armRoomDisconnect(roomRef,fbUser.uid,isHost);
-   startPresenceHeartbeat();
-   if(connectionState===false)await restoreRoomConnection();
-   else{
-    await recoverStaleProcessingLock().catch(()=>{});
-    if(started){
-     const state=(await roomRef.child('state').once('value')).val();
-     if(state&&Number(state.seq)>lastEvent)await recoverRoomSnapshot().catch(()=>{});
-     else if(state&&Array.isArray(state.snapshot&&state.snapshot.diceState?state.snapshot.diceState:null)){/* keep */}
-     if(state&&Number(state.seq)>=lastEvent){
-      roomTurnToken=state.turnToken||roomTurnToken;roomExpectedUid=state.activeUid||roomExpectedUid;
-      if(state.snapshot)applyNetSnapshot(state.snapshot);
-      if(Array.isArray(state.snapshot&&state.snapshot.diceState)&&state.snapshot.diceState.length===24){S.set(state.snapshot.diceState);V.on=0;draw();}
-     }
-    }
+   if(connectionState===false){await restoreRoomConnection();return;}
+   if(!started)return;
+   const state=(await roomRef.child('state').once('value')).val();
+   if(!state)return;
+   roomTurnToken=state.turnToken||roomTurnToken;roomExpectedUid=state.activeUid||roomExpectedUid;
+   const seq=Number(state.seq)||0;
+   if(seq>lastEvent+1)await recoverRoomSnapshot().catch(()=>{});
+   else if(seq>=lastEvent&&state.snapshot&&!roomAnimationPending&&!busy&&!V.on){
+    /* тихий sync только если ничего не анимируется */
+    const dice=state.snapshot.diceState;
+    if(Array.isArray(dice)&&dice.length===24){S.set(dice);draw();}
    }
   }catch(e){reportFirebase('👁',e);}
- })();
+ },120);
 });
 
 
@@ -1126,17 +1132,21 @@ q.vx=q.vx*.5+(e.clientX-q.x)/dt/V.s*.5;q.vy=q.vy*.5+(e.clientY-q.y)/dt/V.s*.5;q.
 if(sp>8&&now-V.hitT>250&&V.on!=3&&hitDie(e.clientX,e.clientY,6)&&canControlDie()){V.hitT=now;launch(q.vx/sp,q.vy/sp,Math.min(sp,VMAX)*.9,0,[18,.18])}});
 /* кубик отпустили без броска: он подпрыгивает, проворачивается на месте и падает на грань — на ребре или в воздухе он не остаётся никогда */
 function settle(){V.touched=true;V.on=1;V.t=performance.now();V.acc=0;S[18]=0;S[19]=0;S[20]=-1;job=null;V.target=0;
-const r=()=>(Math.random()<.5?-1:1)*(9+Math.random()*8);S[2]=Math.max(S[2],.58);S[3]=S[4]=0;S[5]=6;S[6]=r();S[7]=r();S[8]=(Math.random()*2-1)*6;V.netLaunchState=Array.from(S);
+const r=()=>(Math.random()<.5?-1:1)*(12+Math.random()*14);
+S[2]=Math.max(S[2],.62);S[3]=(Math.random()-.5)*3;S[4]=(Math.random()-.5)*3;S[5]=7+Math.random()*4;
+S[6]=r();S[7]=r();S[8]=(Math.random()<.5?-1:1)*(10+Math.random()*12);
+if(Math.hypot(S[6],S[7],S[8])<16){S[6]+=(S[6]<0?-8:8);S[7]+=(S[7]<0?-8:8)}
+V.netLaunchState=Array.from(S);
 if(canControlDie())V.armed=true;requestAnimationFrame(dieLoop)}
 function gup(e){delete TP[e.pointerId];const g=G_;if(!g||e.pointerId!=g.id)return;G_=null;
 /* как в локальной версии: короткий тап — бросок в сторону сектора; долгое удержание — settle только если наш ход */
 if(!g.drag){
- if(performance.now()-g.s[0][0]>400){if(canControlDie())settle();return}
+ if(performance.now()-g.s[0][0]>400){if(canControlDie())settle();else if(V.on){V.on=0;snapFlat();}return}
  const a=Math.atan2(g.y0-g.cy,g.x0-g.cx),k=((Math.round(a/(Math.PI/4))%8)+8)%8,d=SECT[k];
  launch(d[0],d[1],13+Math.random()*8,0,[45,.35]);return}
 const now=performance.now(),a=g.s.filter(q=>now-q[0]<100),f=a[0]||g.s[g.s.length-1],l=g.s[g.s.length-1],dt=Math.max((l[0]-f[0])/1000,.016);
 const vx=(l[1]-f[1])/dt/V.s,vy=(l[2]-f[2])/dt/V.s,sp=Math.hypot(vx,vy);V.on=0;
-if(sp<4){S[2]=.5;S[3]=S[4]=S[5]=S[6]=S[7]=S[8]=0;draw();return}
+if(sp<4){if(canControlDie())settle();else snapFlat();return}
 launch(vx/sp,vy/sp,Math.min(sp,VMAX),0,[18,.18])}
 board.addEventListener('pointerup',gup);board.addEventListener('pointercancel',gup);board.addEventListener('lostpointercapture',gup);
 function onMotion(e){let a=e.acceleration,ax,ay;if(a&&a.x!=null){ax=a.x;ay=a.y}else{const g=e.accelerationIncludingGravity;if(!g)return;V.lp.x+=.15*(g.x-V.lp.x);V.lp.y+=.15*(g.y-V.lp.y);ax=g.x-V.lp.x;ay=g.y-V.lp.y}

@@ -90,10 +90,11 @@ test('network dice replay then pawn movement use original timings and final sync
   assert.ok(source.includes("if(mode==='draw'){"));
   assert.ok(source.includes('await replayNetDice(event)'));
   assert.ok(source.includes('await play(Number(event.roll))'));
-  assert.ok(source.includes('function playInstant(roll)'));
-  assert.ok(source.includes('playInstant(Number(request.roll))'));
+  assert.ok(source.includes('function playInstant(roll'));
+  assert.ok(source.includes('playInstant(Number(request.roll),true)'));
   assert.ok(source.includes('await playNetTurn(event)'));
-  assert.ok(source.includes('финальная синхронизация') || source.includes('event.diceState'));
+  assert.ok(source.includes('event.diceState'));
+  assert.ok(source.includes('function playInstant(roll,silent)') || source.includes('playInstant(Number(request.roll),true)'));
   assert.ok(source.includes('async function processHostOwnRoll'));
   assert.ok(source.includes('roomAnimationPending=true;'));
   assert.ok(source.includes('roomAnimationPending=false;'));
